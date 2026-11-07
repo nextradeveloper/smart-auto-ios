@@ -34,12 +34,6 @@ struct VehicleSnapshot: Equatable {
     let satelliteCount: Int?
     let updatedAt: String
     let location: VehicleLocation?
-
-    var displayName: String {
-        if !remarkName.isEmpty { return remarkName }
-        if !name.isEmpty { return name }
-        return carCode.isEmpty ? "ZONTES" : carCode
-    }
 }
 
 /// One model and colour from the artwork catalog behind the official app's bind screen.
@@ -98,7 +92,6 @@ enum ZontesError: LocalizedError {
     case commandTimedOut
     case commandRejected
     case commandConnectionClosed
-    case bluetoothPasswordRejected
 
     var errorDescription: String? {
         switch self {
@@ -116,8 +109,6 @@ enum ZontesError: LocalizedError {
             return "รถปฏิเสธคำสั่ง กรุณารีเฟรชสถานะรถแล้วลองใหม่"
         case .commandConnectionClosed:
             return "การเชื่อมต่อระบบควบคุมรถถูกตัดก่อนรถตอบรับ"
-        case .bluetoothPasswordRejected:
-            return "รหัส Bluetooth ของรถไม่ถูกต้อง"
         }
     }
 }

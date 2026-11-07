@@ -54,15 +54,17 @@ challenge, then `*BT,{PKE},10,001,{action},{signature}#` (1.12 `vf9.a`). The AES
 `AES-ECB("TAYOBTa1YCWc2gTS", MCUID)` with the challenge XORed into bytes 12–15 and the
 vehicle's **Bluetooth password** (6 digits read as 3 hex bytes) XORed into bytes 0–2.
 
-The password is not on the account. The factory value is the PKE code's last six characters,
-but binding in the official app sends `…,10,001,11,{signature},{new password}#` and the owner
-must choose a new one, which that phone keeps in its own database. So a bound bike signs with a
-password only the owner knows; with the factory value it answers `*AT,{PKE},10,001,{action},0#`.
+The owner reports that the ZONTES vehicles use the Bluetooth password `000000`, so Smart Auto
+signs with it and does not ask for one. (The 1.12 bind screen can set another password with
+`…,10,001,11,{signature},{new password}#`; a vehicle with a different one answers
+`*AT,{PKE},10,001,{action},0#`.)
 
-After a refused action the official app sends the version query (action 10) signed the same
-way; a refusal there means the password is wrong, and it asks for the 6-digit password. Smart
-Auto does the same and keeps the confirmed password in the Keychain per PKE code (removed on
-logout). Frames are written to the app log with the PKE code masked and signatures dropped.
+The vehicle also reports state without an action: every challenge reply carries the battery
+voltage in tenths of a volt (`*AT,{PKE},10,008,{challenge},126…#` is 12.6 V), and the reply to
+the prime frame `*BT,{PKE},10,001,7#` carries the lock state (`…,7,1#` locked, `…,7,2#`
+unlocked). Smart Auto primes on connect, asks for one challenge 1.2 s later to read the
+battery, and lights Lock or Unlock from those replies and from acknowledged commands. Frames are
+written to the app log with the PKE code masked and signatures dropped.
 
 ## Vehicle artwork
 
@@ -72,7 +74,8 @@ model and colour from `GET https://tayo.zontesmotor.com/zontespkeapp/api/GX/PKE/
 `imagePath + indexImg` locally. The service groups codes by tens: `001` (350/368/703 ranges),
 `010` (125–175 scooters) and `020` (368G/400G/250G). For example the account may return the
 2024 high-seat "368G Gray" render while the owner picked "368G Gray (ETC)". Smart Auto
-lets the owner pick from the same catalog and stores the choice per PKE code.
+lets the owner pick from the same catalog and stores the choice per PKE code. The same catalog
+names the model ("ZONTES 368G") when the account has no name for the vehicle.
 
 ## Other findings
 

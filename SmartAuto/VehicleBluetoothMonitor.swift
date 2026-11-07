@@ -3,15 +3,32 @@ import Combine
 import Foundation
 
 // ZONTES Smart 1.12 BLE authentication (vf9.a). The key mixes in the vehicle's 6-digit
-// Bluetooth password: the factory value is the PKE code's last six characters, and binding
-// in the official app replaces it with one the owner chooses.
+// Bluetooth password.
 enum LegacyBluetoothProtocol {
-    /// Version query. The official app sends it after a refused action to tell a wrong
-    /// password apart from a refused action; it moves nothing on the vehicle.
-    static let versionQuery = "10"
+    /// The Bluetooth password the ZONTES vehicles use.
+    static let password = "000000"
 
-    static func isValidPassword(_ password: String) -> Bool {
-        password.utf8.count == 6 && password.utf8.allSatisfy { (48...57).contains($0) }
+    /// What the vehicle reports without being asked for an action.
+    struct Reading: Equatable {
+        var locked: Bool?
+        var voltage: Double?
+    }
+
+    /// Every challenge reply carries the battery voltage in tenths of a volt
+    /// (`*AT,{PKE},10,008,{challenge},{126}…#`), and the prime reply carries the lock state
+    /// (`*AT,{PKE},10,001,7,{1 locked | 2 unlocked}#`), as the official app reads them.
+    static func reading(fields: [String], pke: String) -> Reading? {
+        guard fields.count >= 6, ["*AT", "*BT"].contains(fields[0]), fields[1] == pke, fields[2] == "10" else { return nil }
+        if fields[3] == "008" {
+            guard let tenths = Double(fields[5]), (50...200).contains(tenths) else { return nil }
+            return Reading(voltage: tenths / 10)
+        }
+        guard fields[3] == "001", fields[4] == "7" else { return nil }
+        switch fields[5] {
+        case "1": return Reading(locked: true)
+        case "2": return Reading(locked: false)
+        default: return nil
+        }
     }
 
     enum Response: Equatable {
@@ -34,9 +51,7 @@ enum LegacyBluetoothProtocol {
         if fields.count == 5 { return .acknowledged }
         // As in the official app, a trailing 0 is a refusal for every action.
         if fields.last == "0" { return .rejected }
-        if fields[5] == "1" { return .acknowledged }
-        // The version query answers with version data instead of a status flag.
-        return action == versionQuery ? .acknowledged : .ignored
+        return fields[5] == "1" ? .acknowledged : .ignored
     }
 
     static func packet(action: String, pke: String, mcu: String, challenge: String, password: String) throws -> Data {
@@ -54,7 +69,7 @@ enum LegacyBluetoothProtocol {
         }
         let code = Array(pke.utf8)
         guard (1...64).contains(code.count), code.allSatisfy({ (33...126).contains($0) && $0 != 44 && $0 != 35 }),
-              ["1", "2", "5", "6", versionQuery].contains(action) else { throw ZontesError.invalidVehicleKey }
+              ["1", "2", "5", "6"].contains(action) else { throw ZontesError.invalidVehicleKey }
         let seed = try hex(mcu, count: 16)
         let nonce = try hex(challenge, count: 4)
         let passwordBytes = try hex(password, count: 3)
@@ -89,8 +104,9 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     }
     @Published private(set) var status: Status = .unavailable
     @Published private(set) var commandInProgress: VehicleCommand?
-    @Published private(set) var isCheckingPassword = false
-    var isBusy: Bool { commandInProgress != nil || isCheckingPassword }
+    /// Live from the vehicle while connected; nil until it reports.
+    @Published private(set) var isLocked: Bool?
+    @Published private(set) var batteryVoltage: Double?
     private let serviceID = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     private let writeID = CBUUID(string: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
     private let notifyID = CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -102,8 +118,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     private var frameBuffer = ""
     private var continuation: CheckedContinuation<Void, Error>?
     private var action = ""
-    private var password = ""
-    private var phase = 0 // 0 idle, 1 challenge, 2 action submitted
+    private var phase = 0 // 0 idle, 1 challenge, 2 action submitted, 3 battery reading
+    private var readingID = 0
     private var chunks: [Data] = []
     private var writeType: CBCharacteristicWriteType = .withResponse
     private var writePending = false
@@ -124,6 +140,7 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         self.peripheral = nil
         writer = nil
+        isLocked = nil; batteryVoltage = nil
         self.pke = pke.trimmingCharacters(in: .whitespacesAndNewlines)
         self.mcu = mcu.trimmingCharacters(in: .whitespacesAndNewlines)
         refresh()
@@ -146,8 +163,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     }
 
     func send(_ command: VehicleCommand) async throws {
-        try ensureIdle()
-        let action: String
+        guard status.isPositive, writer != nil else { throw ZontesError.message("กรุณาเชื่อมต่อ Bluetooth กับรถก่อน") }
+        guard continuation == nil, commandInProgress == nil else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
         switch command {
         case .lock: action = "1"
         case .unlock: action = "2"
@@ -155,48 +172,11 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         case .seat: action = "6"
         case .find: throw ZontesError.message("ค้นหารถใช้การเชื่อมต่อระบบรถ")
         }
-        let password = BluetoothPasswordStore.load(pke: pke) ?? String(pke.suffix(6))
+        guard pke.count >= 6 else { throw ZontesError.invalidVehicleKey }
         commandInProgress = command
         defer { commandInProgress = nil }
-        do {
-            try await perform(action, password: password)
-        } catch ZontesError.commandRejected {
-            do {
-                try await perform(LegacyBluetoothProtocol.versionQuery, password: password)
-            } catch ZontesError.commandRejected {
-                throw ZontesError.bluetoothPasswordRejected
-            } catch {}
-            throw ZontesError.commandRejected
-        }
-    }
-
-    /// Checks a password with the version query and keeps it for this vehicle if it is right.
-    func verifyPassword(_ password: String) async throws {
-        try ensureIdle()
-        guard LegacyBluetoothProtocol.isValidPassword(password) else {
-            throw ZontesError.message("รหัส Bluetooth ต้องเป็นตัวเลข 6 หลัก")
-        }
-        let target = pke
-        isCheckingPassword = true
-        defer { isCheckingPassword = false }
-        do {
-            try await perform(LegacyBluetoothProtocol.versionQuery, password: password)
-        } catch ZontesError.commandRejected {
-            throw ZontesError.bluetoothPasswordRejected
-        }
-        try BluetoothPasswordStore.save(password, pke: target)
-    }
-
-    private func ensureIdle() throws {
-        guard status.isPositive, writer != nil else { throw ZontesError.message("กรุณาเชื่อมต่อ Bluetooth กับรถก่อน") }
-        guard continuation == nil, !isBusy else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
-    }
-
-    private func perform(_ action: String, password: String) async throws {
-        guard pke.count >= 6 else { throw ZontesError.invalidVehicleKey }
-        guard continuation == nil else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
-        self.action = action
-        self.password = password
+        // A battery reading already asked for a challenge; its reply serves this action.
+        let challengeRequested = phase == 3
         phase = 1
         notificationCount = 0
         ignoredFrameCount = 0
@@ -204,7 +184,7 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         let operation = operationID
         try await withCheckedThrowingContinuation { (pending: CheckedContinuation<Void, Error>) in
             continuation = pending
-            enqueue(Data("*BT,\(pke),10,008#".utf8))
+            if !challengeRequested { enqueue(Data("*BT,\(pke),10,008#".utf8)) }
             let current = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                 guard let self, self.generation == current, self.operationID == operation, self.continuation != nil else { return }
@@ -218,6 +198,21 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
                 }
                 self.finish(ZontesError.message(text))
             }
+        }
+        if command == .lock { isLocked = true }
+        if command == .unlock { isLocked = false }
+    }
+
+    /// Asks for a challenge only to read the battery voltage its reply carries.
+    func readBattery() {
+        guard status.isPositive, writer != nil, phase == 0, continuation == nil, pke.count >= 6 else { return }
+        phase = 3
+        readingID += 1
+        let reading = readingID
+        enqueue(Data("*BT,\(pke),10,008#".utf8))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.phase == 3, self.readingID == reading else { return }
+            self.phase = 0
         }
     }
 
@@ -235,12 +230,14 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         central?.stopScan()
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
         peripheral = nil; writer = nil; chunks.removeAll(); writePending = false; frameBuffer = ""
+        isLocked = nil; batteryVoltage = nil
+        if phase == 3 { phase = 0 }
         finish(ZontesError.commandConnectionClosed)
     }
 
     private func finish(_ error: Error? = nil) {
         guard let pending = continuation else { return }
-        continuation = nil; phase = 0; password = ""
+        continuation = nil; phase = 0
         if let error { chunks.removeAll(); pending.resume(throwing: error) } else { pending.resume() }
     }
 
@@ -281,11 +278,19 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
             guard let start = raw.lastIndex(of: "*") else { continue }
             logFrame("RX", String(raw[start...]))
             let fields = raw[start...].dropLast().split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            if let reading = LegacyBluetoothProtocol.reading(fields: fields, pke: pke) {
+                if let locked = reading.locked { isLocked = locked }
+                if let voltage = reading.voltage { batteryVoltage = voltage }
+            }
+            if phase == 3 {
+                if fields.count > 3, fields[3] == "008" { phase = 0 }
+                continue
+            }
             guard phase == 1 || phase == 2 else { continue }
             switch LegacyBluetoothProtocol.response(fields: fields, pke: pke, action: action, awaitingChallenge: phase == 1) {
             case let .challenge(value):
                 do {
-                    let packet = try LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: value, password: password)
+                    let packet = try LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: value, password: LegacyBluetoothProtocol.password)
                     phase = 2
                     enqueue(packet)
                 } catch { finish(error) }
@@ -357,6 +362,7 @@ extension VehicleBluetoothMonitor: CBPeripheralDelegate {
             guard error == nil, characteristic.isNotifying, self.writer != nil else { self.disconnect(); self.status = .ready; return }
             self.status = .connected(peripheral.name ?? "ZONTES")
             self.enqueue(Data("*BT,\(self.pke),10,001,7#".utf8))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.readBattery() }
         }
     }
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {

@@ -16,17 +16,32 @@ final class VehicleCommandProtocolTests: XCTestCase {
         XCTAssertEqual(parse("*AT,\(pke),10,001,1,0#", challenge: false), .rejected)
         XCTAssertEqual(parse("*AT,\(pke),10,001,2,1#", challenge: false), .ignored)
         XCTAssertEqual(parse("*AT,\(pke),10,001,1,1,126#", challenge: false), .acknowledged)
-        XCTAssertEqual(parse("*AT,\(pke),10,001,10,1,124#", action: "10", challenge: false), .acknowledged)
-        XCTAssertEqual(parse("*AT,\(pke),10,001,10,0#", action: "10", challenge: false), .rejected)
-        XCTAssertEqual(parse("*AT,\(pke),10,001,7,1#", action: "10", challenge: false), .ignored)
+        XCTAssertEqual(parse("*AT,\(pke),10,001,6,0#", action: "6", challenge: false), .rejected)
+        XCTAssertEqual(parse("*AT,\(pke),10,001,7,1#", action: "6", challenge: false), .ignored)
     }
 
-    // Vectors from the official 1.12 vf9.a(), reimplemented outside the app: binding there
-    // replaces the factory password, so the owner's password must reach the key.
-    func testLegacyBluetoothOwnerPasswordPacket() throws {
+    func testLegacyBluetoothReadings() {
+        let pke = "123456789000123"
+        func read(_ frame: String) -> LegacyBluetoothProtocol.Reading? {
+            let fields = frame.dropLast().split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            return LegacyBluetoothProtocol.reading(fields: fields, pke: pke)
+        }
+        XCTAssertEqual(read("*AT,\(pke),10,008,89ABCDEF,126#"), LegacyBluetoothProtocol.Reading(voltage: 12.6))
+        XCTAssertEqual(read("*AT,\(pke),10,008,89ABCDEF,131,1#"), LegacyBluetoothProtocol.Reading(voltage: 13.1))
+        XCTAssertNil(read("*AT,\(pke),10,008,89ABCDEF#"))
+        XCTAssertNil(read("*AT,\(pke),10,008,89ABCDEF,0#"))
+        XCTAssertEqual(read("*AT,\(pke),10,001,7,1#"), LegacyBluetoothProtocol.Reading(locked: true))
+        XCTAssertEqual(read("*AT,\(pke),10,001,7,2#"), LegacyBluetoothProtocol.Reading(locked: false))
+        XCTAssertNil(read("*AT,\(pke),10,001,1,1#"))
+        XCTAssertNil(read("*AT,OTHER,10,001,7,1#"))
+    }
+
+    // Vectors from the official 1.12 vf9.a(), reimplemented outside the app: the
+    // Bluetooth password is part of the key.
+    func testLegacyBluetoothPasswordPacket() throws {
         let pke = "123456789000123"
         let mcu = "12345678901234567890123456789012"
-        for action in ["1", "6", LegacyBluetoothProtocol.versionQuery] {
+        for action in ["1", "6"] {
             let packet = try LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: "12345678", password: "135790")
             XCTAssertEqual(String(decoding: packet, as: UTF8.self),
                            "*BT,\(pke),10,001,\(action),6c022e77839dcbf88e11afd0556729dc#")
@@ -36,10 +51,9 @@ final class VehicleCommandProtocolTests: XCTestCase {
                        "*BT,\(pke),10,001,2,de0b9eaaaa81e0e2b3f1a535aaaf04ab#")
         XCTAssertThrowsError(try LegacyBluetoothProtocol.packet(action: "7", pke: pke, mcu: mcu, challenge: "12345678", password: "135790"))
 
-        XCTAssertTrue(LegacyBluetoothProtocol.isValidPassword("135790"))
-        XCTAssertFalse(LegacyBluetoothProtocol.isValidPassword("13579"))
-        XCTAssertFalse(LegacyBluetoothProtocol.isValidPassword("1357901"))
-        XCTAssertFalse(LegacyBluetoothProtocol.isValidPassword("13579a"))
+        let fixed = try LegacyBluetoothProtocol.packet(action: "1", pke: pke, mcu: mcu, challenge: "12345678", password: LegacyBluetoothProtocol.password)
+        XCTAssertEqual(String(decoding: fixed, as: UTF8.self),
+                       "*BT,\(pke),10,001,1,6ce19362ae5a0b4008b471b4a4707bf8#")
     }
 
     func testLegacyBluetoothFactoryPasswordPacket() throws {

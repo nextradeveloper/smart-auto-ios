@@ -8,6 +8,8 @@ final class ZontesAppModel: ObservableObject {
         didSet {
             guard oldValue?.carCode != vehicle?.carCode else { return }
             selectedStyle = vehicle.flatMap { VehicleStyleStore.load(pke: $0.carCode) }
+            // The catalog names the model when the account gives no name.
+            if vehicle != nil { Task { try? await loadMotorCatalog() } }
         }
     }
     /// Model and colour the owner picked, matching the artwork in the official app.
@@ -81,6 +83,32 @@ final class ZontesAppModel: ObservableObject {
 
     var vehicleImageURL: URL? { selectedStyle?.imageURL ?? vehicle?.imageURL }
 
+    /// The picked style, or the catalog entry whose artwork the account uses.
+    var vehicleStyle: MotorStyle? {
+        if let selectedStyle { return selectedStyle }
+        guard let file = vehicle?.imageURL?.lastPathComponent else { return nil }
+        return motorCatalog.flatMap { $0.styles }.first { $0.imageURL.lastPathComponent == file }
+    }
+
+    var modelName: String {
+        if let category = vehicleStyle?.category, !category.isEmpty { return "ZONTES \(category)" }
+        if let name = vehicle?.name, !name.isEmpty { return name }
+        return "ZONTES"
+    }
+
+    /// The owner's name for the vehicle, otherwise its model.
+    var vehicleTitle: String {
+        if let remark = vehicle?.remarkName, !remark.isEmpty { return remark }
+        return modelName
+    }
+
+    /// Model and colour under the title, without repeating it.
+    var vehicleSubtitle: String? {
+        let candidate = vehicleStyle?.name ?? (vehicle?.remarkName.isEmpty == false ? modelName : nil)
+        guard let detail = candidate, !detail.isEmpty, detail.uppercased() != vehicleTitle.uppercased() else { return nil }
+        return detail
+    }
+
     func loadMotorCatalog() async throws {
         guard motorCatalog.isEmpty else { return }
         motorCatalog = try await ZontesAPI.shared.motorCatalog()
@@ -95,7 +123,6 @@ final class ZontesAppModel: ObservableObject {
 
     func logout() {
         ZontesSessionStore.clear()
-        BluetoothPasswordStore.clearAll()
         session = nil
         vehicle = nil
         message = nil

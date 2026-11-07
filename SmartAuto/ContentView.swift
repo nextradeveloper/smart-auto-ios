@@ -176,10 +176,12 @@ private struct MainShellView: View {
 private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
     @StateObject private var bluetooth = VehicleBluetoothMonitor()
-    @State private var pendingCommand: VehicleCommand?
-    @State private var asksBluetoothPassword = false
-    @State private var bluetoothPassword = ""
     @State private var showsStylePicker = false
+    /// Seat or fuel lid that just opened; lit for a few seconds, as in the official app.
+    @State private var justOpened: VehicleCommand?
+
+    private var isLocked: Bool? { bluetooth.isLocked ?? model.vehicle?.isLocked }
+    private var batteryVoltage: Double? { bluetooth.batteryVoltage ?? model.vehicle?.batteryVoltage }
 
     var body: some View {
         ZStack {
@@ -190,37 +192,20 @@ private struct VehicleDashboardView: View {
             )
             .ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    header
-                    connectionStrip
-                    statusBar
-                    vehicleImage
-                    controlWheel
-                    HStack(spacing: 12) {
-                        bluetoothAction(.seat)
-                        bluetoothAction(.fuelLid)
-                    }
-                    pageDots
-                    lastUpdate
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
-                .padding(.bottom, 18)
+            // The page fits the screen instead of scrolling; the artwork gives up space first.
+            VStack(spacing: 12) {
+                header
+                connectionStrip
+                statusBar
+                vehicleImage
+                controlWheel
+                searchButton
+                lastUpdate
             }
-            .refreshable { await model.refresh() }
-            .alert("รหัส Bluetooth ของรถ", isPresented: $asksBluetoothPassword) {
-                SecureField("รหัส 6 หลัก", text: $bluetoothPassword)
-                    .keyboardType(.numberPad)
-                Button("ตรวจสอบ") { checkBluetoothPassword() }
-                Button("ยกเลิก", role: .cancel) { bluetoothPassword = "" }
-            } message: {
-                Text("รถไม่รับรหัส Bluetooth ที่แอปใช้อยู่ กรอกรหัส 6 หลักที่ตั้งไว้ตอนผูกรถในแอป ZONTES Smart")
-            }
-            .sheet(isPresented: $showsStylePicker) {
-                VehicleStylePicker()
-                    .environmentObject(model)
-            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .frame(maxHeight: .infinity, alignment: .top)
 
             if model.isBusy && model.vehicle == nil {
                 ProgressView(model.busyText.isEmpty ? "กำลังดึงข้อมูลรถ…" : model.busyText)
@@ -228,27 +213,9 @@ private struct VehicleDashboardView: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .alert(item: $pendingCommand) { command in
-            Alert(
-                title: Text(command.title),
-                message: Text("ยืนยันส่งคำสั่งนี้ไปยังรถ \(model.vehicle?.displayName ?? "")"),
-                primaryButton: .destructive(Text("ยืนยัน")) {
-                    Task {
-                        if command == .find {
-                            await model.send(command)
-                        } else {
-                            do {
-                                try await bluetooth.send(command)
-                                model.message = "รถตอบรับคำสั่ง “\(command.title)” ผ่าน Bluetooth แล้ว"
-                            } catch ZontesError.bluetoothPasswordRejected {
-                                bluetoothPassword = ""
-                                asksBluetoothPassword = true
-                            } catch { model.message = error.localizedDescription }
-                        }
-                    }
-                },
-                secondaryButton: .cancel(Text("ยกเลิก"))
-            )
+        .sheet(isPresented: $showsStylePicker) {
+            VehicleStylePicker()
+                .environmentObject(model)
         }
         .onAppear { configureBluetooth() }
         .onChange(of: model.vehicle?.carCode) { _ in configureBluetooth() }
@@ -259,52 +226,55 @@ private struct VehicleDashboardView: View {
         bluetooth.configure(pke: model.vehicle?.carCode ?? "", mcu: model.vehicle?.mcuID ?? "")
     }
 
-    private func checkBluetoothPassword() {
-        let candidate = bluetoothPassword.trimmingCharacters(in: .whitespacesAndNewlines)
-        bluetoothPassword = ""
+    private func run(_ command: VehicleCommand) {
         Task {
+            if command == .find {
+                await model.send(command)
+                return
+            }
             do {
-                try await bluetooth.verifyPassword(candidate)
-                model.message = "รหัส Bluetooth ถูกต้องและบันทึกแล้ว กดสั่งงานรถอีกครั้งได้เลย"
-            } catch ZontesError.bluetoothPasswordRejected {
-                model.message = "รหัส Bluetooth ไม่ถูกต้อง กดสั่งงานอีกครั้งเพื่อกรอกรหัสใหม่"
+                try await bluetooth.send(command)
+                guard command == .seat || command == .fuelLid else { return }
+                justOpened = command
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if justOpened == command { justOpened = nil }
             } catch {
                 model.message = error.localizedDescription
             }
         }
     }
 
-    private func bluetoothAction(_ command: VehicleCommand) -> some View {
-        Button { pendingCommand = command } label: {
-            Label(command.title, systemImage: command.systemImage)
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+    private func refreshAll() {
+        if bluetooth.status.isPositive {
+            bluetooth.readBattery()
+        } else {
+            bluetooth.refresh()
         }
-        .buttonStyle(.plain)
-        .disabled(!bluetooth.status.isPositive || bluetooth.isBusy)
+        Task { await model.refresh() }
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.vehicle?.displayName.uppercased() ?? "ZONTES")
+                Text(model.vehicleTitle.uppercased())
                     .font(.system(size: 20, weight: .black, design: .rounded))
                     .tracking(2)
-                Text(model.vehicle?.carCode.isEmpty == false ? model.vehicle?.carCode ?? "" : "รถของคุณ")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if let subtitle = model.vehicleSubtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-            Spacer()
-            Button {
+            Spacer(minLength: 0)
+            RoundIconButton(systemImage: "arrow.clockwise", label: "รีเฟรช", isWorking: model.isBusy) {
+                refreshAll()
+            }
+            RoundIconButton(systemImage: "bell", label: "การแจ้งเตือน") {
                 model.message = "ยังไม่มีการแจ้งเตือนใหม่"
-            } label: {
-                Image(systemName: "bell")
-                    .font(.title3)
-                    .frame(width: 42, height: 42)
-                    .background(.white.opacity(0.06), in: Circle())
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -338,7 +308,16 @@ private struct VehicleDashboardView: View {
                 Image(systemName: "fuelpump.fill")
                     .foregroundStyle(.cyan)
             }
-            Spacer()
+            Spacer(minLength: 0)
+            Label {
+                Text(batteryVoltage.map { String(format: "%.1f V", $0) } ?? "--")
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+            } icon: {
+                Image(systemName: batterySymbol)
+                    .foregroundStyle(batteryColor)
+            }
+            .accessibilityLabel("แบตเตอรี่")
+            Spacer(minLength: 0)
             Rectangle()
                 .fill(.red)
                 .frame(width: 26, height: 2)
@@ -351,6 +330,23 @@ private struct VehicleDashboardView: View {
         .padding(.horizontal, 16)
         .frame(height: 42)
         .background(.white.opacity(0.06), in: Capsule())
+    }
+
+    /// Rough 12 V battery charge from the resting voltage; charging reads as full.
+    private var batterySymbol: String {
+        guard let volts = batteryVoltage else { return "battery.0" }
+        if volts >= 12.6 { return "battery.100" }
+        if volts >= 12.4 { return "battery.75" }
+        if volts >= 12.2 { return "battery.50" }
+        if volts >= 12.0 { return "battery.25" }
+        return "battery.0"
+    }
+
+    private var batteryColor: Color {
+        guard let volts = batteryVoltage else { return .secondary }
+        if volts >= 12.4 { return .green }
+        if volts >= 12.0 { return .orange }
+        return .red
     }
 
     private var vehicleImage: some View {
@@ -377,7 +373,8 @@ private struct VehicleDashboardView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 235)
+        .frame(minHeight: 110, maxHeight: 235)
+        .layoutPriority(-1)
         .contentShape(Rectangle())
         .onTapGesture { showsStylePicker = true }
         .overlay(alignment: .bottomTrailing) {
@@ -397,7 +394,7 @@ private struct VehicleDashboardView: View {
             .resizable()
             .scaledToFit()
             .foregroundStyle(.white.opacity(0.28))
-            .padding(48)
+            .padding(36)
     }
 
     private var controlWheel: some View {
@@ -416,41 +413,41 @@ private struct VehicleDashboardView: View {
             wheelDivider.rotationEffect(.degrees(45))
             wheelDivider.rotationEffect(.degrees(-45))
 
-            WheelButton(title: "Search", systemImage: "location.fill", isWorking: model.commandInProgress == .find) {
-                pendingCommand = .find
-            }
-            .offset(y: -82)
+            Group {
+                WheelButton(title: "Fuel", systemImage: "fuelpump.fill",
+                            isActive: justOpened == .fuelLid,
+                            isWorking: bluetooth.commandInProgress == .fuelLid) { run(.fuelLid) }
+                    .offset(y: -82)
 
-            WheelButton(title: "Lock", systemImage: "lock.fill", accent: .cyan, isWorking: bluetooth.commandInProgress == .lock) {
-                pendingCommand = .lock
-            }
-            .disabled(!bluetooth.status.isPositive)
-            .offset(x: -82)
+                WheelButton(title: "Lock", systemImage: "lock.fill",
+                            isActive: isLocked == true,
+                            isWorking: bluetooth.commandInProgress == .lock) { run(.lock) }
+                    .offset(x: -82)
 
-            WheelButton(title: "Unlock", systemImage: "lock.open.fill", isWorking: bluetooth.commandInProgress == .unlock) {
-                pendingCommand = .unlock
-            }
-            .disabled(!bluetooth.status.isPositive)
-            .offset(x: 82)
+                WheelButton(title: "Unlock", systemImage: "lock.open.fill",
+                            isActive: isLocked == false,
+                            isWorking: bluetooth.commandInProgress == .unlock) { run(.unlock) }
+                    .offset(x: 82)
 
-            WheelButton(title: "Refresh", systemImage: "arrow.clockwise") {
-                Task { await model.refresh() }
+                WheelButton(title: "Seat", systemImage: VehicleCommand.seat.systemImage,
+                            isActive: justOpened == .seat,
+                            isWorking: bluetooth.commandInProgress == .seat) { run(.seat) }
+                    .offset(y: 82)
             }
-            .offset(y: 82)
+            .disabled(!bluetooth.status.isPositive || bluetooth.commandInProgress != nil)
 
-            VStack(spacing: 3) {
-                Image(systemName: model.vehicle?.isOnline == true ? "bolt.fill" : "bolt.slash.fill")
-                    .foregroundStyle(model.vehicle?.isOnline == true ? Color.cyan : Color.secondary)
-                Text("ZONTES")
-                    .font(.caption2.weight(.black))
-                    .tracking(1)
-            }
-            .frame(width: 68, height: 68)
-            .background(.black, in: Circle())
-            .overlay { Circle().stroke(.white.opacity(0.12)) }
+            Image(systemName: bluetooth.status.isPositive ? "bolt.fill" : "bolt.slash.fill")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(bluetooth.status.isPositive ? Color.cyan : Color.secondary)
+                .shadow(color: bluetooth.status.isPositive ? Color.cyan.opacity(0.7) : Color.clear, radius: 8)
+                .frame(width: 68, height: 68)
+                .background(.black, in: Circle())
+                .overlay {
+                    Circle().stroke(bluetooth.status.isPositive ? Color.cyan.opacity(0.45) : Color.white.opacity(0.12))
+                }
+                .accessibilityLabel(bluetooth.status.isPositive ? "เชื่อมต่อ Bluetooth แล้ว" : "ยังไม่เชื่อมต่อ Bluetooth")
         }
         .frame(width: 252, height: 252)
-        .disabled(model.commandInProgress != nil || bluetooth.isBusy)
     }
 
     private var wheelDivider: some View {
@@ -459,18 +456,55 @@ private struct VehicleDashboardView: View {
             .frame(width: 1, height: 236)
     }
 
-    private var pageDots: some View {
-        HStack(spacing: 7) {
-            Circle().fill(.white).frame(width: 5, height: 5)
-            Circle().fill(.white.opacity(0.25)).frame(width: 5, height: 5)
+    private var searchButton: some View {
+        Button { run(.find) } label: {
+            HStack(spacing: 8) {
+                if model.commandInProgress == .find {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: VehicleCommand.find.systemImage)
+                }
+                Text(VehicleCommand.find.title)
+            }
+            .font(.caption.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
         }
-        .padding(.top, 4)
+        .buttonStyle(.plain)
+        .disabled(model.commandInProgress != nil)
     }
 
+    @ViewBuilder
     private var lastUpdate: some View {
-        Text(model.vehicle?.updatedAt.isEmpty == false ? "อัปเดตล่าสุด \(model.vehicle?.updatedAt ?? "")" : "ดึงลงเพื่อรีเฟรชข้อมูล")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+        if let updated = model.vehicle?.updatedAt, !updated.isEmpty {
+            Text("อัปเดตล่าสุด \(updated)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct RoundIconButton: View {
+    let systemImage: String
+    let label: String
+    var isWorking = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if isWorking {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: systemImage).font(.title3)
+                }
+            }
+            .frame(width: 42, height: 42)
+            .background(.white.opacity(0.06), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isWorking)
+        .accessibilityLabel(label)
     }
 }
 
@@ -628,26 +662,29 @@ private struct ConnectionBadge: View {
 private struct WheelButton: View {
     let title: String
     let systemImage: String
-    var accent: Color = .white
+    var isActive = false
     var isWorking = false
     let action: () -> Void
+    @Environment(\.isEnabled) var isEnabled
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
                 if isWorking {
-                    ProgressView().tint(accent)
+                    ProgressView().tint(.cyan)
                 } else {
                     Image(systemName: systemImage)
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(accent)
+                        .foregroundStyle(isActive ? Color.cyan : Color.white)
                 }
                 Text(title)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 9, weight: isActive ? .bold : .medium))
+                    .foregroundStyle(isActive ? Color.cyan : Color.white.opacity(0.9))
             }
             .frame(width: 64, height: 52)
+            .background(isActive ? Color.cyan.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 14))
             .contentShape(Rectangle())
+            .opacity(isEnabled || isWorking ? 1 : 0.4)
         }
         .buttonStyle(.plain)
     }
@@ -854,7 +891,7 @@ private struct AccountView: View {
                 }
 
                 Section("รถที่เชื่อมต่อ") {
-                    LabeledContent("ชื่อรถ", value: model.vehicle?.displayName ?? "--")
+                    LabeledContent("ชื่อรถ", value: model.vehicle == nil ? "--" : model.vehicleTitle)
                     LabeledContent("PKE Code", value: masked(model.vehicle?.carCode ?? model.session?.carCode ?? ""))
                     LabeledContent("สิทธิ์", value: model.session?.isOwner == true ? "เจ้าของรถ" : "ผู้ได้รับอนุญาต")
                 }
