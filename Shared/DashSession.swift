@@ -164,16 +164,13 @@ final class DashSession {
         config.passthroughMode = options.passthrough
         config.captureWidth = options.captureWidth
         config.captureHeight = options.captureHeight
-        if profile.announceMirrorState {
+        if profile.appStatusMode != 0 {
             config.appStatusNotifyEnabled = true
-            // The official app reports the phone's own display; what this phone shows the dash
-            // is the stream, so report that, upright.
-            config.phoneScreenWidth = options.captureWidth > 0 ? options.captureWidth : profile.fallbackWidth
-            config.phoneScreenHeight = options.captureHeight > 0 ? options.captureHeight : profile.fallbackHeight
+            config.appStatusRepeatMode = profile.appStatusMode
+            config.appStatusForeground = true
+            config.phoneScreenWidth = profile.phoneScreenWidth
+            config.phoneScreenHeight = profile.phoneScreenHeight
             config.phoneScreenRotation = 0
-            // Only "the mirror is live", never the notice when PXC comes up: the 368G reset the
-            // 10922 socket right after it (profile H), as upstream saw on another dash.
-            config.appStatusLiveOnly = true
         }
         return config
     }
@@ -305,9 +302,11 @@ final class DashSession {
         case (4, 4):
             // Same number as TransportCmdAppStatusNotify: [mode, written].
             let bytes = [UInt8](payload)
-            log("App status sent: mode=\(bytes.first.map(String.init) ?? "?") written=\(bytes.dropFirst().first.map(String.init) ?? "?")")
+            log("App status sent: mode=\(bytes.first.map(String.init) ?? "?") written=\(bytes.dropFirst().first.map(String.init) ?? "?") (repeats every 1 s)")
         case (2, _):
-            let text = String(decoding: payload.prefix(400), as: UTF8.self)
+            // CLIENT_INFO in full: its mirrorMode and supportFunction decide what the official
+            // app sends this dash.
+            let text = String(decoding: payload.prefix(command == 0x10010 ? 4000 : 400), as: UTF8.self)
             log("PXC 0x\(String(command, radix: 16, uppercase: true)): \(text)")
         case (4, 2):
             // Video pulls: [phase, u64 BE]. Phase 1 = the dash pulled its first frame.

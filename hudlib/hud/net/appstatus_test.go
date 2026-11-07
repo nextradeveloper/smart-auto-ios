@@ -1,8 +1,10 @@
 package net
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // The body has to match kh.b in the CarbitRide APK field for field: a head unit that
@@ -147,4 +149,75 @@ func decodeNumbers(t *testing.T, body []byte) map[string]float64 {
 		}
 	}
 	return out
+}
+
+// The official ZONTES app: FOREGROUND, the same mode every period, starting one period
+// after the session is up, and none of the one-shot notifications.
+func TestAppStatusRepeatSendsForegroundEveryPeriod(t *testing.T) {
+	control := NewPXCControl(":0", nil, nil)
+	control.SetAppStatusNotify(true)
+	control.SetAppStatusRepeat(AppStatusBackground, true)
+	control.SetPhoneScreen(PhoneScreen{Width: 1080, Height: 2640})
+	control.appStatus.repeatEvery = 5 * time.Millisecond
+	reports := make(chan int, 8)
+	control.OnAppStatus = func(mode int, err error) {
+		if err != nil {
+			t.Errorf("app status reported %v", err)
+		}
+		reports <- mode
+	}
+
+	_, server := openControlChannel(t, control)
+	control.SendAppStatus(AppStatusBackground) // the one-shot at CLIENT_INFO: must stay silent
+	control.SendAppStatus(AppStatusMirrorLive) // the one-shot at STREAM_START: same
+	control.StartAppStatusRepeat()
+	control.StartAppStatusRepeat() // a second heartbeat must not start a second loop
+
+	for i := 0; i < 3; i++ {
+		got := readPXCResponse(t, server)
+		if got.Command != PxcAppStatusForeground {
+			t.Fatalf("frame %d command = 0x%x, want 0x%x (FOREGROUND)", i, got.Command, PxcAppStatusForeground)
+		}
+		numbers := decodeNumbers(t, got.Body)
+		if numbers["mode"] != AppStatusBackground || numbers["width"] != 1080 || numbers["height"] != 2640 || numbers["displayRotation"] != 0 {
+			t.Fatalf("frame %d body = %s, want mode 2 upright 1080x2640", i, got.Body)
+		}
+	}
+	if mode := <-reports; mode != AppStatusBackground {
+		t.Fatalf("first report mode = %d, want 2", mode)
+	}
+	select {
+	case mode := <-reports:
+		t.Fatalf("got a second report (mode %d); only the first send is reported", mode)
+	default:
+	}
+	// A pipe write blocks until read: close our end so the loop's next write fails
+	// instead of hanging Stop.
+	_ = server.Close()
+	stopControl(t, control)
+}
+
+func TestAppStatusRepeatNeedsTheNotificationOn(t *testing.T) {
+	control := NewPXCControl(":0", nil, nil)
+	control.SetAppStatusRepeat(AppStatusMirrorLive, true)
+	control.appStatus.repeatEvery = time.Millisecond
+	_, server := openControlChannel(t, control)
+
+	control.StartAppStatusRepeat()
+
+	if err := server.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Read(make([]byte, 1)); err == nil {
+		t.Fatal("repeat sent something with the notification off")
+	}
+}
+
+func stopControl(t *testing.T, control *PXCControl) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := control.Stop(ctx); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
 }

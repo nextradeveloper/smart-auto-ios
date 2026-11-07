@@ -7,3 +7,6 @@ commit 524ccff1e0b268557642d89e688160b7c6cba749
 Removed from the snapshot: static/ (35 MB sample H.264, only read by cmd/hud-desktop) and docs/.
 Local change: hud/api BuildAnnexBAU / BuildAnnexBAUFromAVCC no longer prepend an AUD NAL
   (the official ZONTES EasyConn SDK sends none; the 368G painted nothing with it).
+Local change: hud/net SetAppStatusRepeat (+ core/api AppStatusRepeatMode, AppStatusForeground):
+  ECP_P2C_APPSTATUS_FOREGROUND (0x20020) every second from one second after the dash's first
+  PXC heartbeat, as the official ZONTES app's EcBridge FORCE_GROUND_CHECK does.

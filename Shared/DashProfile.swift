@@ -16,10 +16,12 @@ struct DashProfile: Identifiable, Equatable {
     let clientVersionFingerprint: String
     let clientInfoSupportFunction: Bool
     let supportFunction: Int
-    /// Push ECP_P2C_APPSTATUS_BACKGROUND (0x20030) as the official EasyConn app does: "connected"
-    /// when PXC comes up, "the picture you are pulling is live" once the dash starts the stream.
-    /// Upstream MOTO-HUB (2026-09-12) turns it on only for dashes that pull frames and paint none.
-    var announceMirrorState = false
+    /// Tell the dash the phone app's state the way the official ZONTES app does: from one second
+    /// after the dash connects, every second, ECP_P2C_APPSTATUS_FOREGROUND (0x20020) with this
+    /// mode. 2 is the official app's normal state (its own car screen, the Mapbox map); 1 is a
+    /// true mirror of the phone. 0 sends nothing. Without it the 368G pulls every frame and keeps
+    /// its pairing page up; told BACKGROUND (0x20030) mode 2 at connect, it dropped the link.
+    var appStatusMode = 0
 
     // Shared by E, F and G.
     let proactivePxcHeartbeat = true
@@ -30,6 +32,9 @@ struct DashProfile: Identifiable, Equatable {
     /// Dash area 1280x535 is announced back as 1280x528 (16-aligned); the stream must match it.
     let fallbackWidth = 1280
     let fallbackHeight = 528
+    /// The SM-F711B's display, upright: what the official app reads off getRealSize().
+    let phoneScreenWidth = 1080
+    let phoneScreenHeight = 2640
     let frameRate = 30
     let baseBitRate = 2_500_000
     let keyframeIntervalSeconds = 1.0
@@ -47,14 +52,26 @@ struct DashProfile: Identifiable, Equatable {
 
     static let zontesH = DashProfile(
         id: "zontes_368g_h",
-        title: "Zontes 368G (H) - ทดลอง",
-        detail: "เหมือน G และบอกจอว่าภาพ mirror ทำงานแล้ว (คำสั่ง 0x20030 แบบแอป EasyConn ทางการ) ลองเมื่อจอดึงภาพแต่ไม่แสดง",
+        title: "Zontes 368G (H) - ลองอันนี้ก่อน",
+        detail: "เหมือน G และบอกจอทุก 1 วินาทีว่าแอปเปิดอยู่ (0x20020 โหมด 2) แบบแอป ZONTES ทางการตอนแสดงแผนที่",
         clientPackage: "tayo.com.ZontesIntelligence",
         clientVersionCode: 3034,
         clientVersionFingerprint: "V:1.12(3034)--ONLINE",
         clientInfoSupportFunction: true,
         supportFunction: 128,
-        announceMirrorState: true
+        appStatusMode: 2
+    )
+
+    static let zontesI = DashProfile(
+        id: "zontes_368g_i",
+        title: "Zontes 368G (I) - ทดลอง",
+        detail: "เหมือน H แต่บอกจอว่าเป็นภาพ mirror หน้าจอโทรศัพท์ (0x20020 โหมด 1)",
+        clientPackage: "tayo.com.ZontesIntelligence",
+        clientVersionCode: 3034,
+        clientVersionFingerprint: "V:1.12(3034)--ONLINE",
+        clientInfoSupportFunction: true,
+        supportFunction: 128,
+        appStatusMode: 1
     )
 
     static let zontesF = DashProfile(
@@ -79,7 +96,7 @@ struct DashProfile: Identifiable, Equatable {
         supportFunction: 0
     )
 
-    static let all: [DashProfile] = [zontesG, zontesH, zontesF, zontesE]
+    static let all: [DashProfile] = [zontesG, zontesH, zontesI, zontesF, zontesE]
 
     static func byID(_ id: String?) -> DashProfile {
         all.first { $0.id == id } ?? zontesG

@@ -72,8 +72,29 @@ the reference is the official app's EasyConn SDK, `build/zontes-jadx/sources/net
 Smart Auto therefore sends no AUD (hudlib `BuildAnnexBAU`), rewrites VideoToolbox's NAL headers
 (`0x27/0x28/0x25/0x21`) to MediaCodec's (`0x67/0x68/0x65/0x41`) and drops SEI/AUD
 (`Shared/H264NAL.swift`), and logs `Video framing: extended=… plain=…` and the first keyframe's
-bytes. Profile H sends only the "mirror is live" app status (`AppStatusLiveOnly`): the 368G reset
-the 10922 socket right after the "connected" one.
+bytes.
+
+Field log 2026-11-07 (build 23): the dash then received exactly that (`67 42 00 1f`, Baseline
+3.1, 1280x528, `[67,68,65]`, plain framing) and pulled it, and still kept its pairing page up.
+The picture was never the problem; the dash is never told the phone app is there:
+
+- `MediaProjectService.sendCurrentStateToCar` sends `ECP_P2C_APPSTATUS_FOREGROUND` (0x20020) while
+  the app's screen shows (`isOnForeground()`), `ECP_P2C_APPSTATUS_BACKGROUND` (0x20030) otherwise.
+  Same body: `{"displayRotation","width","height","enableAccessibility","enableAOAHid","mode"}`,
+  width/height the phone's real display. Mode 1 = true mirror, 2 = the app's own car screen (its
+  normal state, the Mapbox presentation), 3 = split with overlay. ZONTES' listener does not
+  override `isSendCurrentMirrorStateBySelf`, so the SDK sends it.
+- When: on PXC connect (`EcManager.onPxcConnected`), on EasyConnect plus one second, then every
+  second while PXC is up (`EcBridge` `FORCE_GROUND_CHECK`, `sendEmptyMessageDelayed(…, 1000)`), and
+  on activity pause.
+- The old profile H sent BACKGROUND mode 2 the instant CLIENT_INFO was answered; the 368G reset
+  10922 within milliseconds.
+
+Profile H now sends FOREGROUND mode 2 every second from one second after the dash's first PXC
+heartbeat (hudlib `SetAppStatusRepeat`); profile I the same with mode 1. Body: 1080x2640 upright,
+the SM-F711B this identity claims. A dash that knows the command acks `0x20021`, visible in the log
+as `PXC 0x20021`. CLIENT_INFO (0x10010) is now logged in full for its `mirrorMode`: 2 makes the
+official app use true mirror (mode 1).
 
 The iCarCast relay (CarPlay direct) is High profile, level 4.2, 60 fps, which the official app
 would never send this dash; it would need re-encoding to Baseline 3.1 to match.

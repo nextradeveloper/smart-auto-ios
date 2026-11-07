@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/charliecharlieO-o/ridedaemon-go/internal/logging"
 )
@@ -45,7 +46,16 @@ const (
 	PxcAppStatus uint32 = 0x20030
 	// PxcAppStatusAck is the cmd+1 the dash owes it.
 	PxcAppStatusAck uint32 = PxcAppStatus + 1
+	// PxcAppStatusForeground is ECP_P2C_APPSTATUS_FOREGROUND (131104): the same body,
+	// sent instead of BACKGROUND while the official app's own screen is showing
+	// (MediaProjectService.sendCurrentStateToCar, isOnForeground()).
+	PxcAppStatusForeground uint32 = 0x20020
 )
+
+// appStatusRepeatEvery is the official ZONTES app's FORCE_GROUND_CHECK period: from one
+// second after the dash connects, EcBridge re-sends the current state every second for
+// as long as PXC is up.
+const appStatusRepeatEvery = time.Second
 
 // Mode values from kh.b.a(int) and its two call sites in n0.java.
 const (
@@ -84,6 +94,29 @@ type appStatusState struct {
 	liveOnly bool
 	screen   PhoneScreen
 	sent     map[int]bool
+
+	// The official ZONTES app's behaviour, see SetAppStatusRepeat. 0 keeps the one-shot
+	// notifications above.
+	repeatMode       int
+	repeatForeground bool
+	repeatEvery      time.Duration // tests shrink it
+	repeatOnce       sync.Once
+}
+
+// SetAppStatusRepeat replaces the one-shot notifications with what the official ZONTES
+// app (EasyConn SDK inside tayo.com.ZontesIntelligence 1.12) does: one second after the
+// dash's PXC session is up, and every second after that until it ends, it states the
+// same mode - FOREGROUND while its screen shows, BACKGROUND otherwise. Mode 2 is its
+// normal state (the dash shows the app's own car screen, its Mapbox map); mode 1 is a
+// true mirror of the phone. A mode of 0 turns this off. Needs SetAppStatusNotify.
+//
+// The 368G drops the PXC socket when told BACKGROUND mode 2 the moment CLIENT_INFO is
+// answered, and with nothing at all it pulls every frame and keeps its pairing page up.
+func (s *PXCControl) SetAppStatusRepeat(mode int, foreground bool) {
+	s.appStatus.mu.Lock()
+	defer s.appStatus.mu.Unlock()
+	s.appStatus.repeatMode = mode
+	s.appStatus.repeatForeground = foreground
 }
 
 // SetAppStatusNotify enables the ECP_P2C_APPSTATUS_BACKGROUND notifications above.
@@ -155,7 +188,8 @@ func buildAppStatusBody(screen PhoneScreen, mode int) ([]byte, error) {
 // says STREAM_START twice must not be told twice that the mirror went live.
 func (s *PXCControl) SendAppStatus(mode int) {
 	s.appStatus.mu.Lock()
-	enabled := s.appStatus.enabled && (!s.appStatus.liveOnly || mode == AppStatusMirrorLive)
+	enabled := s.appStatus.enabled && s.appStatus.repeatMode == 0 &&
+		(!s.appStatus.liveOnly || mode == AppStatusMirrorLive)
 	screen := s.appStatus.screen
 	already := s.appStatus.sent[mode]
 	if enabled && !already {
@@ -200,4 +234,72 @@ func (s *PXCControl) noteAppStatus(mode int, err error) {
 		return
 	}
 	s.OnAppStatus(mode, err)
+}
+
+// StartAppStatusRepeat starts the repeating notification of SetAppStatusRepeat, once
+// per session. It is called when the dash's PXC session is up; without the repeat mode
+// it does nothing.
+func (s *PXCControl) StartAppStatusRepeat() {
+	s.appStatus.mu.Lock()
+	on := s.appStatus.enabled && s.appStatus.repeatMode != 0
+	s.appStatus.mu.Unlock()
+	if !on || s.isStopping() {
+		return
+	}
+	s.appStatus.repeatOnce.Do(func() {
+		s.wg.Add(1)
+		go s.runAppStatusRepeat()
+	})
+}
+
+func (s *PXCControl) runAppStatusRepeat() {
+	defer s.wg.Done()
+
+	s.appStatus.mu.Lock()
+	mode := s.appStatus.repeatMode
+	foreground := s.appStatus.repeatForeground
+	screen := s.appStatus.screen
+	every := s.appStatus.repeatEvery
+	s.appStatus.mu.Unlock()
+	if every <= 0 {
+		every = appStatusRepeatEvery
+	}
+	command := PxcAppStatus
+	if foreground {
+		command = PxcAppStatusForeground
+	}
+	body, err := buildAppStatusBody(screen, mode)
+	if err != nil {
+		s.emitError(&PxcError{PxcWriteErr, fmt.Errorf("encode app status: %w", err), true})
+		s.noteAppStatus(mode, err)
+		return
+	}
+
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for sent := 0; ; sent++ {
+		select {
+		case <-s.quit:
+			return
+		case <-ticker.C:
+		}
+		conn := s.controlConn()
+		if conn == nil {
+			logging.Printf("PXC app status: no open PXC connection to send mode=%d on", mode)
+			s.noteAppStatus(mode, fmt.Errorf("no open PXC connection"))
+			return
+		}
+		err := s.writeResponse(&PXCResponse{Command: command, Body: body}, conn, nil)
+		// The first one and a failure are what a log needs; one line a second is noise.
+		if sent == 0 || err != nil {
+			logging.Printf("PXC app status: sent 0x%x mode=%d body=%s err=%v, repeating every %s", command, mode, body, err, every)
+			s.noteAppStatus(mode, err)
+		}
+		if err != nil {
+			if !s.isStopping() {
+				s.emitError(s.connectionError(conn, PxcWriteErr, err))
+			}
+			return
+		}
+	}
 }

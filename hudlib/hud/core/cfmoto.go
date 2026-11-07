@@ -99,6 +99,8 @@ type CfmotoHUD struct {
 	jpegStills             bool
 	appStatusNotify        bool
 	appStatusLiveOnly      bool
+	appStatusRepeatMode    int
+	appStatusForeground    bool
 	cfmotoAppReplies       bool
 	phoneScreen            net.PhoneScreen
 	captureWidth           int
@@ -266,6 +268,16 @@ func (hud *CfmotoHUD) SetAppStatusLiveOnly(liveOnly bool) {
 	hud.mu.Lock()
 	defer hud.mu.Unlock()
 	hud.appStatusLiveOnly = liveOnly
+}
+
+// SetAppStatusRepeat states the phone's mirroring mode every second from the moment the
+// dash's PXC session is up, the way the official ZONTES app does, instead of the one-shot
+// notifications. Configure it before StartStream. See net.PXCControl.SetAppStatusRepeat.
+func (hud *CfmotoHUD) SetAppStatusRepeat(mode int, foreground bool) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.appStatusRepeatMode = mode
+	hud.appStatusForeground = foreground
 }
 
 // SetCfmotoAppReplies makes the CLIENT_INFO and CHECK_APP_NETWORKING_CAPABILITY replies
@@ -555,6 +567,7 @@ func (hud *CfmotoHUD) startStream(ctx context.Context, initConn stdnet.Conn) (er
 	}
 	pxcServer.SetAppStatusNotify(hud.appStatusNotify)
 	pxcServer.SetAppStatusLiveOnly(hud.appStatusLiveOnly)
+	pxcServer.SetAppStatusRepeat(hud.appStatusRepeatMode, hud.appStatusForeground)
 	pxcServer.SetCfmotoAppReplies(hud.cfmotoAppReplies)
 	pxcServer.SetPhoneScreen(hud.phoneScreen)
 	pxcServer.OnAppStatus = func(mode int, err error) {

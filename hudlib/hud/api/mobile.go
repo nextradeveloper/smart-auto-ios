@@ -131,6 +131,14 @@ type MobileConfig struct {
 	// when PXC comes up: the CFMOTO app's behaviour. See
 	// net.PXCControl.SetAppStatusLiveOnly.
 	AppStatusLiveOnly bool
+	// AppStatusRepeatMode, when 1 or 2, replaces those one-shot notifications with the
+	// official ZONTES app's: that mode, every second, from one second after the dash's
+	// PXC session is up. 2 is its normal state (its own car screen), 1 a true mirror.
+	// See net.PXCControl.SetAppStatusRepeat.
+	AppStatusRepeatMode int
+	// AppStatusForeground sends those as ECP_P2C_APPSTATUS_FOREGROUND (0x20020), what the
+	// official app says while its screen is showing, rather than BACKGROUND (0x20030).
+	AppStatusForeground bool
 	// CfmotoAppReplies answers two PXC questions the way the CFMOTO app does: no
 	// supportFunction in the CLIENT_INFO reply, and {"status":0} to
 	// CHECK_APP_NETWORKING_CAPABILITY. See net.PXCControl.SetCfmotoAppReplies.
@@ -287,6 +295,7 @@ func NewMobileSession(cfg *MobileConfig, cb MobileCallback) (*MobileSession, err
 	ms.hud.SetClientInfoSupportFunction(cfg.ClientInfoSupportFunction)
 	ms.hud.SetAppStatusNotify(cfg.AppStatusNotifyEnabled)
 	ms.hud.SetAppStatusLiveOnly(cfg.AppStatusLiveOnly)
+	ms.hud.SetAppStatusRepeat(cfg.AppStatusRepeatMode, cfg.AppStatusForeground)
 	ms.hud.SetCfmotoAppReplies(cfg.CfmotoAppReplies)
 	ms.hud.SetPhoneScreen(cfg.PhoneScreenWidth, cfg.PhoneScreenHeight, cfg.PhoneScreenRotation, cfg.AppStatusTouchInput)
 	ms.hud.SetCaptureSize(cfg.CaptureWidth, cfg.CaptureHeight)

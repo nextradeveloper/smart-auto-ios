@@ -812,7 +812,11 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 		response := &PXCResponse{Command: PxcHeartbeatOk}
 		if err := s.writeResponse(response, conn, nil); err != nil {
 			s.emitError(s.connectionError(conn, PxcWriteErr, err))
+			break
 		}
+		// The session is up: the moment the official ZONTES app starts stating its
+		// foreground state every second. A no-op unless SetAppStatusRepeat asked for it.
+		s.StartAppStatusRepeat()
 	case PxcCheckSnDone:
 		// The bike acknowledges the phone-originated CHECK_SN_RESULT.
 		s.emitEvent(*event)
