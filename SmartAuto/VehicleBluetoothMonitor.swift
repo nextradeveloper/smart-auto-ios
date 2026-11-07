@@ -126,6 +126,9 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     private var frameBuffer = ""
     private var continuation: CheckedContinuation<Void, Error>?
     private var action = ""
+    /// A challenge the vehicle sent after this action was signed; it replaces the one used.
+    private var newerChallenge: String?
+    private var retriedWithNewerChallenge = false
     private var phase = 0 // 0 idle, 1 challenge, 2 action submitted, 3 battery reading
     private var readingID = 0
     private var chunks: [Data] = []
@@ -186,6 +189,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         // A battery reading already asked for a challenge; its reply serves this action.
         let challengeRequested = phase == 3
         phase = 1
+        newerChallenge = nil
+        retriedWithNewerChallenge = false
         notificationCount = 0
         ignoredFrameCount = 0
         operationID += 1
@@ -214,10 +219,28 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         if command == .unlock { onEvent?(.unlocked) }
     }
 
-    /// Lock again so the vehicle chirps and flashes. Not a parking event: the phone may be
-    /// tens of metres away.
+    /// Makes the vehicle beep and flash. It only does so when its lock state changes, so a
+    /// locked (or unknown) vehicle is unlocked and locked again; it always ends locked. Not a
+    /// parking event: the phone may be tens of metres away.
     func signal() async throws {
-        try await send(.lock, reportsEvent: false)
+        if isLocked == false {
+            try await send(.lock, reportsEvent: false)
+            return
+        }
+        try await send(.unlock, reportsEvent: false)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        var lastError: Error?
+        for attempt in 0 ..< 3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
+            do {
+                try await send(.lock, reportsEvent: false)
+                return
+            } catch {
+                lastError = error
+            }
+        }
+        EventLog.record("BLE", "Signal: unlocked but could not lock again (\(lastError?.localizedDescription ?? "unknown")).")
+        throw ZontesError.message("รถส่งสัญญาณแล้ว แต่ล็อกกลับไม่สำเร็จ รถยังปลดล็อกอยู่ กรุณากด Lock")
     }
 
     /// Reads RSSI twice a second while the find screen is open, and keeps scanning so the
@@ -338,6 +361,11 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
                 continue
             }
             guard phase == 1 || phase == 2 else { continue }
+            if phase == 2, case let .challenge(value) = LegacyBluetoothProtocol.response(fields: fields, pke: pke, action: action, awaitingChallenge: true) {
+                // A late reply to an earlier challenge request: the vehicle now expects this one.
+                newerChallenge = value
+                continue
+            }
             switch LegacyBluetoothProtocol.response(fields: fields, pke: pke, action: action, awaitingChallenge: phase == 1) {
             case let .challenge(value):
                 do {
@@ -346,7 +374,17 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
                     enqueue(packet)
                 } catch { finish(error) }
             case .acknowledged: finish()
-            case .rejected: finish(ZontesError.commandRejected)
+            case .rejected:
+                // Refused because a newer challenge replaced the signed one: sign once more.
+                if let challenge = newerChallenge, !retriedWithNewerChallenge,
+                   let packet = try? LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: challenge, password: LegacyBluetoothProtocol.password) {
+                    retriedWithNewerChallenge = true
+                    newerChallenge = nil
+                    EventLog.record("BLE", "Refused after a newer challenge; signing again with it.")
+                    enqueue(packet)
+                } else {
+                    finish(ZontesError.commandRejected)
+                }
             case .ignored: ignoredFrameCount += 1
             }
         }

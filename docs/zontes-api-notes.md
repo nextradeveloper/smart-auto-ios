@@ -102,8 +102,14 @@ reset. Smart Auto finds the vehicle from the phone instead (`FindVehicleView`):
   20–50 m from the vehicle; otherwise the drop spot is used.
 - **Signal.** While the screen is open the app reads the link RSSI twice a second and shows a
   rough distance band, vibrating quicker as it gets closer.
-- **Chirp.** "Make the vehicle beep" re-sends Lock; the owner reports that lock and unlock
-  make the vehicle beep and flash. It is not recorded as a parking event.
+- **Chirp.** The vehicle beeps and flashes only when its lock state changes: a Lock sent to a
+  locked vehicle is acknowledged (`…,001,1,1#`) but silent (seen on the owner's 368G with the
+  engine off). So "make the vehicle beep" unlocks and locks again (retrying the lock up to three
+  times), or just locks an unlocked vehicle. It is not recorded as a parking event.
+
+A challenge request can be answered late, after the next one: the vehicle then refuses an action
+signed with the earlier challenge (`…,001,5,0#` right after an extra `…,10,008,…#`). The app
+keeps the newest challenge seen while waiting for the acknowledgement and signs once more with it.
 
 If the app is force-quit, iOS does not wake it when Bluetooth drops; the spot then updates at the
 next Lock.

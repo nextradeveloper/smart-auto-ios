@@ -244,7 +244,7 @@ struct FindVehicleView: View {
             ) { signal() }
             .disabled(!bluetooth.status.isPositive || isSignalling || bluetooth.commandInProgress != nil)
 
-            Text(signalError ?? "ใช้ได้เมื่ออยู่ในระยะ Bluetooth · รถจะล็อกด้วย")
+            Text(signalError ?? "ใช้ได้เมื่ออยู่ในระยะ Bluetooth · รถจะปลดล็อกแล้วล็อกกลับทันทีเพื่อส่งเสียงและไฟ")
                 .font(.caption)
                 .foregroundStyle(signalError == nil ? Color.secondary : Color.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
