@@ -46,6 +46,8 @@ enum VehicleCommand: String, Identifiable, CaseIterable {
     case lock
     case unlock
     case find
+    case seat
+    case fuelLid
 
     var id: String { rawValue }
 
@@ -54,6 +56,8 @@ enum VehicleCommand: String, Identifiable, CaseIterable {
         case .lock: return "ล็อกรถ"
         case .unlock: return "ปลดล็อกรถ"
         case .find: return "ค้นหารถ"
+        case .seat: return "เปิดเบาะ"
+        case .fuelLid: return "เปิดฝาถังน้ำมัน"
         }
     }
 
@@ -62,6 +66,8 @@ enum VehicleCommand: String, Identifiable, CaseIterable {
         case .lock: return "lock.fill"
         case .unlock: return "lock.open.fill"
         case .find: return "location.fill"
+        case .seat: return "rectangle.open.vertical"
+        case .fuelLid: return "fuelpump.fill"
         }
     }
 }

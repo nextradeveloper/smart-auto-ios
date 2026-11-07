@@ -194,6 +194,10 @@ private struct VehicleDashboardView: View {
                     statusBar
                     vehicleImage
                     controlWheel
+                    HStack(spacing: 12) {
+                        bluetoothAction(.seat)
+                        bluetoothAction(.fuelLid)
+                    }
                     pageDots
                     lastUpdate
                 }
@@ -214,11 +218,38 @@ private struct VehicleDashboardView: View {
                 title: Text(command.title),
                 message: Text("ยืนยันส่งคำสั่งนี้ไปยังรถ \(model.vehicle?.displayName ?? "")"),
                 primaryButton: .destructive(Text("ยืนยัน")) {
-                    Task { await model.send(command) }
+                    Task {
+                        if command == .find {
+                            await model.send(command)
+                        } else {
+                            do {
+                                try await bluetooth.send(command)
+                                model.message = "รถตอบรับคำสั่ง “\(command.title)” ผ่าน Bluetooth แล้ว"
+                            } catch { model.message = error.localizedDescription }
+                        }
+                    }
                 },
                 secondaryButton: .cancel(Text("ยกเลิก"))
             )
         }
+        .onAppear { configureBluetooth() }
+        .onChange(of: model.vehicle?.carCode) { _ in configureBluetooth() }
+        .onChange(of: model.vehicle?.mcuID) { _ in configureBluetooth() }
+    }
+
+    private func configureBluetooth() {
+        bluetooth.configure(pke: model.vehicle?.carCode ?? "", mcu: model.vehicle?.mcuID ?? "")
+    }
+
+    private func bluetoothAction(_ command: VehicleCommand) -> some View {
+        Button { pendingCommand = command } label: {
+            Label(command.title, systemImage: command.systemImage)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .disabled(!bluetooth.status.isPositive || bluetooth.commandInProgress != nil)
     }
 
     private var header: some View {
@@ -348,11 +379,13 @@ private struct VehicleDashboardView: View {
             WheelButton(title: "Lock", systemImage: "lock.fill", accent: .cyan, isWorking: model.commandInProgress == .lock) {
                 pendingCommand = .lock
             }
+            .disabled(!bluetooth.status.isPositive)
             .offset(x: -82)
 
             WheelButton(title: "Unlock", systemImage: "lock.open.fill", isWorking: model.commandInProgress == .unlock) {
                 pendingCommand = .unlock
             }
+            .disabled(!bluetooth.status.isPositive)
             .offset(x: 82)
 
             WheelButton(title: "Refresh", systemImage: "arrow.clockwise") {
@@ -372,7 +405,7 @@ private struct VehicleDashboardView: View {
             .overlay { Circle().stroke(.white.opacity(0.12)) }
         }
         .frame(width: 252, height: 252)
-        .disabled(model.commandInProgress != nil)
+        .disabled(model.commandInProgress != nil || bluetooth.commandInProgress != nil)
     }
 
     private var wheelDivider: some View {
@@ -406,9 +439,9 @@ private struct ConnectionBadge: View {
         HStack(spacing: 9) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isPositive ? Color.cyan : Color.secondary)
+                .foregroundStyle(isPositive ? Color.green : Color.secondary)
                 .frame(width: 26, height: 26)
-                .background((isPositive ? Color.cyan : Color.white).opacity(0.09), in: Circle())
+                .background((isPositive ? Color.green : Color.white).opacity(0.09), in: Circle())
             VStack(alignment: .leading, spacing: 1) {
                 Text(title.uppercased())
                     .font(.system(size: 8, weight: .bold))

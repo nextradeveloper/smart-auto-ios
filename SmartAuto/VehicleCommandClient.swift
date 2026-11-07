@@ -45,6 +45,8 @@ final class VehicleCommandClient {
         case .find:
             prefix = "*UF"
             responseCode = "3"
+        case .seat, .fuelLid:
+            throw ZontesError.message("คำสั่งนี้ต้องเชื่อมต่อ Bluetooth กับรถ")
         }
 
         let deviceID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
@@ -120,7 +122,7 @@ enum LegacyRemoteProtocol {
         return nonce + "," + encryptedTime.hexString
     }
 
-    private static func aesECBEncrypt(_ input: Data, key: Data) throws -> Data {
+    static func aesECBEncrypt(_ input: Data, key: Data) throws -> Data {
         guard key.count == 16, input.count.isMultiple(of: 16) else {
             throw ZontesError.invalidVehicleKey
         }
