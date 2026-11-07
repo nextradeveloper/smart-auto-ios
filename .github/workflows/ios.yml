@@ -86,6 +86,52 @@ jobs:
             test 2>&1 | tee build/protocol-tests.log
           grep -q 'TEST SUCCEEDED' build/protocol-tests.log
 
+      - name: Revoke old CI development certificates
+        if: env.ASC_KEY_ID != '' && env.APPLE_TEAM_ID != '' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          # Each fresh runner makes a new Apple Development certificate while archiving, and
+          # the account hits Apple's certificate limit after a few builds. Only development
+          # certificates this API key created ("Created via API") are revoked; distribution
+          # certificates and ones made by hand are kept. TestFlight builds are not affected.
+          python3 -m venv "$RUNNER_TEMP/asc"
+          "$RUNNER_TEMP/asc/bin/pip" install --quiet pyjwt cryptography
+          "$RUNNER_TEMP/asc/bin/python" - <<'PY'
+          import json, os, time, urllib.error, urllib.request
+          import jwt
+
+          now = int(time.time())
+          token = jwt.encode(
+              {"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"},
+              os.environ["ASC_KEY_P8"],
+              algorithm="ES256",
+              headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"},
+          )
+
+          def call(method, path):
+              request = urllib.request.Request(
+                  "https://api.appstoreconnect.apple.com" + path,
+                  method=method,
+                  headers={"Authorization": "Bearer " + token},
+              )
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      body = response.read()
+              except urllib.error.HTTPError as error:
+                  print(method, path, error.code, error.read().decode(errors="replace"))
+                  raise
+              return json.loads(body) if body else None
+
+          for certificate in call("GET", "/v1/certificates?limit=200")["data"]:
+              attributes = certificate["attributes"]
+              kind = attributes.get("certificateType")
+              label = (attributes.get("displayName") or "") + " " + (attributes.get("name") or "")
+              revoke = kind in ("DEVELOPMENT", "IOS_DEVELOPMENT") and "Created via API" in label
+              print("revoke" if revoke else "keep  ", kind, label.strip(), attributes.get("expirationDate"))
+              if revoke:
+                  call("DELETE", "/v1/certificates/" + certificate["id"])
+          PY
+
       - name: Archive and upload to TestFlight
         if: env.ASC_KEY_ID != '' && env.APPLE_TEAM_ID != '' && github.ref == 'refs/heads/main'
         run: |
