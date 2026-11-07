@@ -72,6 +72,8 @@ enum ZontesError: LocalizedError {
     case missingVehicle
     case invalidVehicleKey
     case commandTimedOut
+    case commandRejected
+    case commandConnectionClosed
 
     var errorDescription: String? {
         switch self {
@@ -84,7 +86,11 @@ enum ZontesError: LocalizedError {
         case .invalidVehicleKey:
             return "ข้อมูลยืนยันตัวรถไม่ครบ จึงยังส่งคำสั่งไม่ได้"
         case .commandTimedOut:
-            return "เชื่อมต่อระบบควบคุมรถไม่สำเร็จ กรุณาลองใหม่"
+            return "รถไม่ตอบรับคำสั่งภายในเวลาที่กำหนด กรุณาตรวจสัญญาณแล้วลองใหม่"
+        case .commandRejected:
+            return "รถปฏิเสธคำสั่ง กรุณารีเฟรชสถานะรถแล้วลองใหม่"
+        case .commandConnectionClosed:
+            return "การเชื่อมต่อระบบควบคุมรถถูกตัดก่อนรถตอบรับ"
         }
     }
 }

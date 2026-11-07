@@ -6,6 +6,7 @@ final class ZontesAppModel: ObservableObject {
     @Published private(set) var session: ZontesSession?
     @Published private(set) var vehicle: VehicleSnapshot?
     @Published private(set) var isBusy = false
+    @Published private(set) var busyText = ""
     @Published private(set) var commandInProgress: VehicleCommand?
     @Published var message: String?
 
@@ -22,11 +23,16 @@ final class ZontesAppModel: ObservableObject {
             return
         }
         isBusy = true
-        defer { isBusy = false }
+        busyText = "กำลังเข้าสู่ระบบ…"
+        defer {
+            isBusy = false
+            busyText = ""
+        }
         do {
             let newSession = try await ZontesAPI.shared.login(account: account, password: password)
             try ZontesSessionStore.save(newSession)
             session = newSession
+            busyText = "กำลังโหลดข้อมูลรถ…"
             vehicle = try await ZontesAPI.shared.vehicle(session: newSession)
         } catch {
             message = error.localizedDescription
@@ -36,7 +42,11 @@ final class ZontesAppModel: ObservableObject {
     func refresh() async {
         guard let session else { return }
         isBusy = true
-        defer { isBusy = false }
+        busyText = "กำลังโหลดข้อมูลรถ…"
+        defer {
+            isBusy = false
+            busyText = ""
+        }
         do {
             vehicle = try await ZontesAPI.shared.vehicle(session: session)
         } catch {
@@ -53,7 +63,7 @@ final class ZontesAppModel: ObservableObject {
         defer { commandInProgress = nil }
         do {
             try await VehicleCommandClient.shared.send(command, session: session, vehicle: vehicle)
-            message = "ส่งคำสั่ง “\(command.title)” แล้ว กำลังรอข้อมูลจากรถ"
+            message = "รถตอบรับคำสั่ง “\(command.title)” แล้ว"
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refresh()
         } catch {

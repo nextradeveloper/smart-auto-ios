@@ -44,6 +44,7 @@ targets:
         UIBackgroundModes:
           - location
         NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อทำงานต่อเบื้องหลังขณะส่ง CarPlay ขึ้นจอรถ
+        NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อตรวจสอบว่ารถ ZONTES อยู่ใกล้และเชื่อมต่อกับ iPhone แล้วหรือไม่
         # iCarCast's local stream (127.0.0.1) presents a certificate for another name.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -66,6 +67,7 @@ targets:
         embed: false
       - sdk: ReplayKit.framework
       - sdk: CoreLocation.framework
+      - sdk: CoreBluetooth.framework
       - sdk: CryptoKit.framework
       - sdk: Network.framework
       - sdk: Security.framework

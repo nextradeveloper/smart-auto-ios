@@ -26,7 +26,9 @@ plain-text password. The returned session is stored in the iOS Keychain.
 The home snapshot is a form POST to `ashx/Index/Index.ashx` with `method=getIndex`,
 `ACCESSTOKEN`, and `language`. Its response includes `myCarData`, `CarLocation`, online
 state, and `imgPath`. Vehicle artwork is constructed from `imgPath`,
-`/GX/Box/MotorPic/`, and the vehicle's `NameImg` (falling back to `IndexImg`).
+`/GX/Box/MotorPic/`, and the vehicle's `IndexImg` (falling back to `NameImg`). The official
+Android client also stores and displays `IndexImg`; `NameImg` can be a model wordmark rather
+than vehicle artwork.
 
 Observed telemetry fields include fuel percentage, estimated range, lock state, battery
 voltage, tire pressures, maintenance distance, satellite count, and update time.
@@ -37,12 +39,19 @@ Remote controls do not use the home REST endpoint. The official app opens a TCP 
 to the vendor command service on port 4510, sends a user/device handshake, then a vehicle
 command. Each lock, unlock, or find command contains the authenticated user code, bound PKE
 code, and a time-based proof derived from the bound MCU identifier. The implementation in
-`VehicleCommandClient.swift` mirrors the 1.12 client format and requires an explicit UI
-confirmation before sending a command.
+`VehicleCommandClient.swift` mirrors the 1.12 client format, requires an explicit UI
+confirmation, and waits for the matching `*AO` acknowledgement (`1` lock, `2` unlock,
+`3` find) before reporting success.
 
-The app deliberately reports a command as “sent”, not “vehicle completed”. It refreshes the
-home snapshot afterward because a successful TCP write alone does not prove that the vehicle
-performed the action.
+The acknowledgement proves that the vendor command service accepted the command; the app then
+refreshes the home snapshot because this still does not prove the physical action completed.
+
+## Bluetooth status
+
+The official client uses Nordic UART service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (plus
+legacy service `A041`) for nearby BLE functions. Smart Auto scans only those services and
+reports Bluetooth power, nearby, and system-connected states. It deliberately does not seize
+or pair a nearby peripheral automatically, which could interrupt the official app.
 
 ## Other findings
 

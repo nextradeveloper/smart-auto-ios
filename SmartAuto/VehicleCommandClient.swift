@@ -35,10 +35,17 @@ final class VehicleCommandClient {
 
         let proof = try CommandProof.make(mcuID: mcuID)
         let prefix: String
+        let responseCode: String
         switch command {
-        case .lock: prefix = "*ULoc"
-        case .unlock: prefix = "*UClear"
-        case .find: prefix = "*UF"
+        case .lock:
+            prefix = "*ULoc"
+            responseCode = "1"
+        case .unlock:
+            prefix = "*UClear"
+            responseCode = "2"
+        case .find:
+            prefix = "*UF"
+            responseCode = "3"
         }
         let payload = "\(prefix),\(session.userCode),\(carCode),\(proof)"
         let deviceID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
@@ -48,6 +55,7 @@ final class VehicleCommandClient {
             let operation = PendingVehicleCommand(
                 handshake: handshake,
                 payload: payload,
+                responseCode: responseCode,
                 continuation: continuation
             )
             operation.start()
@@ -64,17 +72,21 @@ private final class PendingVehicleCommand {
     )
     private let handshake: Data
     private let payload: Data
+    private let responseCode: String
     private let continuation: CheckedContinuation<Void, Error>
     private let lock = NSLock()
     private var finished = false
+    private var responseBuffer = ""
 
     init(
         handshake: String,
         payload: String,
+        responseCode: String,
         continuation: CheckedContinuation<Void, Error>
     ) {
         self.handshake = Data(handshake.utf8)
         self.payload = Data(payload.utf8)
+        self.responseCode = responseCode
         self.continuation = continuation
     }
 
@@ -83,6 +95,7 @@ private final class PendingVehicleCommand {
             guard let self else { return }
             switch state {
             case .ready:
+                self.receiveResponses()
                 self.sendHandshake()
             case let .failed(error):
                 self.finish(.failure(error))
@@ -116,10 +129,49 @@ private final class PendingVehicleCommand {
             guard let self else { return }
             if let error {
                 self.finish(.failure(error))
-            } else {
-                self.finish(.success(()))
             }
         })
+    }
+
+    private func receiveResponses() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+            if let data, !data.isEmpty {
+                self.responseBuffer += String(decoding: data, as: UTF8.self)
+                self.consumeCompleteFrames()
+            }
+            if !isComplete, !self.finished {
+                self.receiveResponses()
+            } else if isComplete, !self.finished {
+                self.finish(.failure(ZontesError.commandConnectionClosed))
+            }
+        }
+    }
+
+    private func consumeCompleteFrames() {
+        while let terminator = responseBuffer.firstIndex(of: "#") {
+            let frame = String(responseBuffer[...terminator])
+            responseBuffer.removeSubrange(...terminator)
+            let fields = frame
+                .dropLast()
+                .split(separator: ",", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard fields.count >= 3,
+                  fields[0] == "*AO",
+                  fields[1] == responseCode
+            else { continue }
+
+            if fields[2] == "1" {
+                finish(.success(()))
+            } else {
+                finish(.failure(ZontesError.commandRejected))
+            }
+            return
+        }
     }
 
     private func finish(_ result: Result<Void, Error>) {

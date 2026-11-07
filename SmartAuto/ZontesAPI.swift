@@ -9,8 +9,8 @@ final class ZontesAPI {
 
     private init() {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 45
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 30
         configuration.httpCookieAcceptPolicy = .always
         configuration.httpShouldSetCookies = true
         configuration.httpAdditionalHeaders = [
@@ -73,12 +73,14 @@ final class ZontesAPI {
         }
 
         let imageBase = string(json, "imgPath", fallback: "https://www.sharpon.com/Tayoimg")
-        let imageName = string(car, "NameImg", fallback: string(car, "IndexImg"))
+        // IndexImg is the vehicle artwork used by the official app. NameImg can be a
+        // model-name graphic (for example, a large “G368” wordmark), not a motorcycle.
+        let imageName = string(car, "IndexImg", fallback: string(car, "NameImg"))
         let locationJSON = array(json["CarLocation"]).first.flatMap { dictionary($0) }
         let rawVoltage = double(car, "Voltage")
 
         return VehicleSnapshot(
-            carCode: string(car, "CarCode", fallback: current.carCode),
+            carCode: string(car, "PKECode", fallback: string(car, "CarCode", fallback: current.carCode)),
             mcuID: string(car, "mcuid", fallback: current.mcuID),
             name: string(car, "ItemName", fallback: string(car, "MotorName")),
             remarkName: string(car, "RemarkName", fallback: string(car, "remarkName")),
@@ -109,7 +111,20 @@ final class ZontesAPI {
         request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         request.httpBody = formBody(form)
 
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError {
+            switch error.code {
+            case .timedOut:
+                throw ZontesError.message("เซิร์ฟเวอร์ ZONTES ไม่ตอบสนอง หากเชื่อมต่อ Wi-Fi ของรถอยู่ ให้ลองปิด Wi-Fi แล้วเข้าสู่ระบบผ่าน 4G/5G")
+            case .cannotFindHost, .cannotConnectToHost, .notConnectedToInternet, .networkConnectionLost:
+                throw ZontesError.message("เชื่อมต่อเซิร์ฟเวอร์ ZONTES ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่")
+            default:
+                throw error
+            }
+        }
         guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
             throw ZontesError.message("ระบบ ZONTES ไม่พร้อมใช้งาน")
         }

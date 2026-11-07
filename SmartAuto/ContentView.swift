@@ -95,7 +95,7 @@ private struct LoginView: View {
                         } label: {
                             HStack {
                                 if model.isBusy { ProgressView().tint(.black) }
-                                Text(model.isBusy ? "กำลังเชื่อมต่อ…" : "เข้าสู่ระบบ")
+                                Text(model.isBusy ? (model.busyText.isEmpty ? "กำลังเชื่อมต่อ…" : model.busyText) : "เข้าสู่ระบบ")
                                     .font(.headline)
                             }
                             .frame(maxWidth: .infinity, minHeight: 52)
@@ -169,8 +169,8 @@ private struct MainShellView: View {
                 .tabItem { Label("MY ACCOUNT", systemImage: "person.fill") }
                 .tag(3)
         }
-        .tint(.white)
-        .toolbarBackground(.black, for: .tabBar)
+        .tint(.cyan)
+        .toolbarBackground(Color(red: 0.035, green: 0.038, blue: 0.042), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarColorScheme(.dark, for: .tabBar)
     }
@@ -178,6 +178,7 @@ private struct MainShellView: View {
 
 private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
+    @StateObject private var bluetooth = VehicleBluetoothMonitor()
     @State private var pendingCommand: VehicleCommand?
 
     var body: some View {
@@ -192,6 +193,7 @@ private struct VehicleDashboardView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     header
+                    connectionStrip
                     statusBar
                     vehicleImage
                     controlWheel
@@ -205,7 +207,7 @@ private struct VehicleDashboardView: View {
             .refreshable { await model.refresh() }
 
             if model.isBusy && model.vehicle == nil {
-                ProgressView("กำลังดึงข้อมูลรถ…")
+                ProgressView(model.busyText.isEmpty ? "กำลังดึงข้อมูลรถ…" : model.busyText)
                     .padding(18)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
@@ -228,14 +230,9 @@ private struct VehicleDashboardView: View {
                 Text(model.vehicle?.displayName.uppercased() ?? "ZONTES")
                     .font(.system(size: 20, weight: .black, design: .rounded))
                     .tracking(2)
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(model.vehicle?.isOnline == true ? Color.green : Color.gray)
-                        .frame(width: 7, height: 7)
-                    Text(model.vehicle?.isOnline == true ? "ONLINE" : "OFFLINE")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                }
+                Text(model.vehicle?.carCode.isEmpty == false ? model.vehicle?.carCode ?? "" : "รถของคุณ")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Button {
@@ -245,6 +242,27 @@ private struct VehicleDashboardView: View {
                     .font(.title3)
                     .frame(width: 42, height: 42)
                     .background(.white.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var connectionStrip: some View {
+        HStack(spacing: 8) {
+            ConnectionBadge(
+                title: "ระบบรถ",
+                value: model.vehicle?.isOnline == true ? "ออนไลน์" : "ออฟไลน์",
+                symbol: "network",
+                isPositive: model.vehicle?.isOnline == true
+            )
+
+            Button { bluetooth.refresh() } label: {
+                ConnectionBadge(
+                    title: "Bluetooth",
+                    value: bluetooth.status.title,
+                    symbol: bluetooth.status.symbol,
+                    isPositive: bluetooth.status.isPositive
+                )
             }
             .buttonStyle(.plain)
         }
@@ -384,6 +402,41 @@ private struct VehicleDashboardView: View {
         Text(model.vehicle?.updatedAt.isEmpty == false ? "อัปเดตล่าสุด \(model.vehicle?.updatedAt ?? "")" : "ดึงลงเพื่อรีเฟรชข้อมูล")
             .font(.caption2)
             .foregroundStyle(.secondary)
+    }
+}
+
+private struct ConnectionBadge: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let isPositive: Bool
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isPositive ? Color.cyan : Color.secondary)
+                .frame(width: 26, height: 26)
+                .background((isPositive ? Color.cyan : Color.white).opacity(0.09), in: Circle())
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 11)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(.white.opacity(0.07), lineWidth: 0.5)
+        }
     }
 }
 
