@@ -41,10 +41,17 @@ targets:
           - _EasyConn._tcp
         ITSAppUsesNonExemptEncryption: false
         # CarPlay direct runs behind iCarCast; location updates keep it running there.
+        # bluetooth-central reports the vehicle's Bluetooth dropping in the background, which
+        # is when the parked spot is saved.
         UIBackgroundModes:
           - location
-        NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อทำงานต่อเบื้องหลังขณะส่ง CarPlay ขึ้นจอรถ
-        NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อตรวจสอบว่ารถ ZONTES อยู่ใกล้และเชื่อมต่อกับ iPhone แล้วหรือไม่
+          - bluetooth-central
+        NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถ นำทางกลับไปหารถ และทำงานต่อเบื้องหลังขณะส่ง CarPlay ขึ้นจอรถ
+        NSLocationAlwaysAndWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถเมื่อคุณเดินออกห่างจากรถ แม้ไม่ได้เปิดแอป
+        NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อสั่งงานรถ ZONTES และช่วยหารถเมื่ออยู่ใกล้
+        # Navigation to the parked spot opens Google Maps when it is installed.
+        LSApplicationQueriesSchemes:
+          - comgooglemaps
         # iCarCast's local stream (127.0.0.1) presents a certificate for another name.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

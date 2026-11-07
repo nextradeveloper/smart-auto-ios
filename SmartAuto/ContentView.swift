@@ -205,7 +205,9 @@ private enum TabIcon {
 private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
     @StateObject private var bluetooth = VehicleBluetoothMonitor()
+    @StateObject private var parking = ParkingSpotTracker()
     @State private var showsStylePicker = false
+    @State private var showsFinder = false
     /// Seat or fuel lid that just opened; lit for a few seconds, as in the official app.
     @State private var justOpened: VehicleCommand?
 
@@ -252,15 +254,15 @@ private struct VehicleDashboardView: View {
     }
 
     private func configureBluetooth() {
-        bluetooth.configure(pke: model.vehicle?.carCode ?? "", mcu: model.vehicle?.mcuID ?? "")
+        let pke = model.vehicle?.carCode ?? ""
+        parking.configure(pke: pke)
+        let tracker = parking
+        bluetooth.onEvent = { event in tracker.handle(event) }
+        bluetooth.configure(pke: pke, mcu: model.vehicle?.mcuID ?? "")
     }
 
     private func run(_ command: VehicleCommand) {
         Task {
-            if command == .find {
-                await model.send(command)
-                return
-            }
             do {
                 try await bluetooth.send(command)
                 guard command == .seat || command == .fuelLid else { return }
@@ -485,14 +487,12 @@ private struct VehicleDashboardView: View {
             .frame(width: 1, height: 236)
     }
 
+    /// Thai vehicles have no 4G module, so this opens the phone-side finder instead of the
+    /// remote find command.
     private var searchButton: some View {
-        Button { run(.find) } label: {
+        Button { showsFinder = true } label: {
             HStack(spacing: 8) {
-                if model.commandInProgress == .find {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: VehicleCommand.find.systemImage)
-                }
+                Image(systemName: VehicleCommand.find.systemImage)
                 Text(VehicleCommand.find.title)
             }
             .font(.caption.weight(.semibold))
@@ -500,7 +500,9 @@ private struct VehicleDashboardView: View {
             .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
-        .disabled(model.commandInProgress != nil)
+        .sheet(isPresented: $showsFinder) {
+            FindVehicleView(bluetooth: bluetooth, parking: parking, vehicleName: model.vehicleTitle)
+        }
     }
 
     @ViewBuilder

@@ -107,6 +107,14 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     /// Live from the vehicle while connected; nil until it reports.
     @Published private(set) var isLocked: Bool?
     @Published private(set) var batteryVoltage: Double?
+    /// Smoothed RSSI in dBm while the find screen measures it.
+    @Published private(set) var signalStrength: Int?
+
+    enum Event { case connected, locked, unlocked, disconnected }
+    /// Called directly, not through SwiftUI, so it also runs while the app is in the background.
+    var onEvent: (@MainActor (Event) -> Void)?
+    private var proximityTimer: Timer?
+    private var smoothedRSSI: Double?
     private let serviceID = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     private let writeID = CBUUID(string: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
     private let notifyID = CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -162,7 +170,7 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         }
     }
 
-    func send(_ command: VehicleCommand) async throws {
+    func send(_ command: VehicleCommand, reportsEvent: Bool = true) async throws {
         guard status.isPositive, writer != nil else { throw ZontesError.message("กรุณาเชื่อมต่อ Bluetooth กับรถก่อน") }
         guard continuation == nil, commandInProgress == nil else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
         switch command {
@@ -201,6 +209,49 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         }
         if command == .lock { isLocked = true }
         if command == .unlock { isLocked = false }
+        guard reportsEvent else { return }
+        if command == .lock { onEvent?(.locked) }
+        if command == .unlock { onEvent?(.unlocked) }
+    }
+
+    /// Lock again so the vehicle chirps and flashes. Not a parking event: the phone may be
+    /// tens of metres away.
+    func signal() async throws {
+        try await send(.lock, reportsEvent: false)
+    }
+
+    /// Reads RSSI twice a second while the find screen is open, and keeps scanning so the
+    /// connection comes back as soon as the vehicle is in range.
+    func startProximity() {
+        guard proximityTimer == nil else { return }
+        smoothedRSSI = nil
+        signalStrength = nil
+        proximityTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.proximityTick() }
+        }
+        proximityTick()
+    }
+
+    func stopProximity() {
+        proximityTimer?.invalidate()
+        proximityTimer = nil
+        smoothedRSSI = nil
+        signalStrength = nil
+    }
+
+    private func proximityTick() {
+        if status.isPositive, let peripheral {
+            peripheral.readRSSI()
+        } else if status == .ready {
+            refresh()
+        }
+    }
+
+    private func record(rssi: Int) {
+        guard proximityTimer != nil, rssi < 0, rssi > -127 else { return }
+        let next = smoothedRSSI.map { $0 * 0.7 + Double(rssi) * 0.3 } ?? Double(rssi)
+        smoothedRSSI = next
+        signalStrength = Int(next.rounded())
     }
 
     /// Asks for a challenge only to read the battery voltage its reply carries.
@@ -230,7 +281,7 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         central?.stopScan()
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
         peripheral = nil; writer = nil; chunks.removeAll(); writePending = false; frameBuffer = ""
-        isLocked = nil; batteryVoltage = nil
+        isLocked = nil; batteryVoltage = nil; smoothedRSSI = nil; signalStrength = nil
         if phase == 3 { phase = 0 }
         finish(ZontesError.commandConnectionClosed)
     }
@@ -308,6 +359,7 @@ extension VehicleBluetoothMonitor: CBCentralManagerDelegate {
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? ""
         let manufacturer = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? Data()
         let serviceData = (advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] ?? [:]).values.reduce(into: Data()) { $0.append($1) }
+        let advertisedRSSI = rssi.intValue
         Task { @MainActor [weak self] in
             guard let self, self.status == .scanning else { return }
             let target = self.pke.uppercased()
@@ -317,6 +369,7 @@ extension VehicleBluetoothMonitor: CBCentralManagerDelegate {
             let targetHex = Data(target.utf8).map { String(format: "%02X", $0) }.joined()
             let simpleName = name.uppercased().filter { $0.isLetter || $0.isNumber }
             guard target.count >= 6, raw.contains(target) || raw.contains(targetHex) || ascii.contains(target) || simpleName == "PKE" + target.suffix(4) else { return }
+            self.record(rssi: advertisedRSSI)
             self.central.stopScan(); self.status = .connecting; self.peripheral = peripheral
             peripheral.delegate = self
             self.central.connect(peripheral)
@@ -334,7 +387,12 @@ extension VehicleBluetoothMonitor: CBCentralManagerDelegate {
         Task { @MainActor [weak self] in guard let self, self.peripheral === peripheral else { return }; self.disconnect(); self.status = .ready }
     }
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        Task { @MainActor [weak self] in guard let self, self.peripheral === peripheral else { return }; self.disconnect(); self.status = .ready }
+        Task { @MainActor [weak self] in
+            guard let self, self.peripheral === peripheral else { return }
+            let wasConnected = self.status.isPositive
+            self.disconnect(); self.status = .ready
+            if wasConnected { self.onEvent?(.disconnected) }
+        }
     }
 }
 
@@ -361,6 +419,7 @@ extension VehicleBluetoothMonitor: CBPeripheralDelegate {
             guard let self, self.peripheral === peripheral, characteristic.uuid == self.notifyID else { return }
             guard error == nil, characteristic.isNotifying, self.writer != nil else { self.disconnect(); self.status = .ready; return }
             self.status = .connected(peripheral.name ?? "ZONTES")
+            self.onEvent?(.connected)
             self.enqueue(Data("*BT,\(self.pke),10,001,7#".utf8))
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.readBattery() }
         }
@@ -377,6 +436,14 @@ extension VehicleBluetoothMonitor: CBPeripheralDelegate {
             guard let self, self.peripheral === peripheral, characteristic.uuid == self.writeID else { return }
             self.writePending = false
             if let error { self.finish(error); self.disconnect(); self.status = .ready; return }; self.writeNext()
+        }
+    }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        let value = RSSI.intValue
+        let failed = error != nil
+        Task { @MainActor [weak self] in
+            guard let self, self.peripheral === peripheral, !failed else { return }
+            self.record(rssi: value)
         }
     }
     nonisolated func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {

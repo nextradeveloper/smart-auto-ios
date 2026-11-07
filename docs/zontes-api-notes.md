@@ -87,3 +87,23 @@ names the model ("ZONTES 368G") when the account has no name for the vehicle.
   value or Mapbox token.
 - Carbit and Mapbox requests in the captures serve projection/navigation and map rendering;
   they are not required for account login or the vehicle image.
+
+## Finding the vehicle (Thai models)
+
+The remote find command (`*UF` over TCP 4510) needs the vehicle's 4G module, which Thai models
+do not have (the account shows them offline). The 1.12 BLE protocol has no find, horn or beep
+action either: its actions are 1/2/5/6, plus `AT+` frames for ambient light, settings, APN and
+reset. Smart Auto finds the vehicle from the phone instead (`FindVehicleView`):
+
+- **Parked spot.** `ParkingSpotTracker` saves the phone's location when Lock is acknowledged
+  (the phone is beside the vehicle) and when the Bluetooth link drops as the rider walks away,
+  also in the background (`bluetooth-central` background mode, "Always" location). After a drop
+  the Lock spot from the same connection is kept if it is within 80 m, since the drop happens
+  20–50 m from the vehicle; otherwise the drop spot is used.
+- **Signal.** While the screen is open the app reads the link RSSI twice a second and shows a
+  rough distance band, vibrating quicker as it gets closer.
+- **Chirp.** "Make the vehicle beep" re-sends Lock; the owner reports that lock and unlock
+  make the vehicle beep and flash. It is not recorded as a parking event.
+
+If the app is force-quit, iOS does not wake it when Bluetooth drops; the spot then updates at the
+next Lock.
