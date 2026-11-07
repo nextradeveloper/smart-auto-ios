@@ -46,12 +46,33 @@ confirmation, and waits for the matching `*AO` acknowledgement (`1` lock, `2` un
 The acknowledgement proves that the vendor command service accepted the command; the app then
 refreshes the home snapshot because this still does not prove the physical action completed.
 
-## Bluetooth status
+## Bluetooth controls
 
-The official client uses Nordic UART service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (plus
-legacy service `A041`) for nearby BLE functions. Smart Auto scans only those services and
-reports Bluetooth power, nearby, and system-connected states. It deliberately does not seize
-or pair a nearby peripheral automatically, which could interrupt the official app.
+The official client uses Nordic UART service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` for
+lock (1), unlock (2), fuel lid (5) and seat (6): `*BT,{PKE},10,008#` asks for a 4-byte
+challenge, then `*BT,{PKE},10,001,{action},{signature}#` (1.12 `vf9.a`). The AES key is
+`AES-ECB("TAYOBTa1YCWc2gTS", MCUID)` with the challenge XORed into bytes 12–15 and the
+vehicle's **Bluetooth password** (6 digits read as 3 hex bytes) XORed into bytes 0–2.
+
+The password is not on the account. The factory value is the PKE code's last six characters,
+but binding in the official app sends `…,10,001,11,{signature},{new password}#` and the owner
+must choose a new one, which that phone keeps in its own database. So a bound bike signs with a
+password only the owner knows; with the factory value it answers `*AT,{PKE},10,001,{action},0#`.
+
+After a refused action the official app sends the version query (action 10) signed the same
+way; a refusal there means the password is wrong, and it asks for the 6-digit password. Smart
+Auto does the same and keeps the confirmed password in the Keychain per PKE code (removed on
+logout). Frames are written to the app log with the PKE code masked and signatures dropped.
+
+## Vehicle artwork
+
+The official app does not show the account's `IndexImg`. While binding, the owner picks a
+model and colour from `GET https://tayo.zontesmotor.com/zontespkeapp/api/GX/PKE/MotorImg/getMotorType/{code}`
+(`{code}` is the model-family field of the PKE's QR label), and the app keeps that style's
+`imagePath + indexImg` locally. The service groups codes by tens: `001` (350/368/703 ranges),
+`010` (125–175 scooters) and `020` (368G/400G/250G). For example the account may return the
+2024 high-seat "368G Gray" render while the owner picked "368G Gray (ETC)". Smart Auto
+lets the owner pick from the same catalog and stores the choice per PKE code.
 
 ## Other findings
 

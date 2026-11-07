@@ -177,6 +177,9 @@ private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
     @StateObject private var bluetooth = VehicleBluetoothMonitor()
     @State private var pendingCommand: VehicleCommand?
+    @State private var asksBluetoothPassword = false
+    @State private var bluetoothPassword = ""
+    @State private var showsStylePicker = false
 
     var body: some View {
         ZStack {
@@ -206,6 +209,18 @@ private struct VehicleDashboardView: View {
                 .padding(.bottom, 18)
             }
             .refreshable { await model.refresh() }
+            .alert("รหัส Bluetooth ของรถ", isPresented: $asksBluetoothPassword) {
+                SecureField("รหัส 6 หลัก", text: $bluetoothPassword)
+                    .keyboardType(.numberPad)
+                Button("ตรวจสอบ") { checkBluetoothPassword() }
+                Button("ยกเลิก", role: .cancel) { bluetoothPassword = "" }
+            } message: {
+                Text("รถไม่รับรหัส Bluetooth ที่แอปใช้อยู่ กรอกรหัส 6 หลักที่ตั้งไว้ตอนผูกรถในแอป ZONTES Smart")
+            }
+            .sheet(isPresented: $showsStylePicker) {
+                VehicleStylePicker()
+                    .environmentObject(model)
+            }
 
             if model.isBusy && model.vehicle == nil {
                 ProgressView(model.busyText.isEmpty ? "กำลังดึงข้อมูลรถ…" : model.busyText)
@@ -225,6 +240,9 @@ private struct VehicleDashboardView: View {
                             do {
                                 try await bluetooth.send(command)
                                 model.message = "รถตอบรับคำสั่ง “\(command.title)” ผ่าน Bluetooth แล้ว"
+                            } catch ZontesError.bluetoothPasswordRejected {
+                                bluetoothPassword = ""
+                                asksBluetoothPassword = true
                             } catch { model.message = error.localizedDescription }
                         }
                     }
@@ -241,6 +259,21 @@ private struct VehicleDashboardView: View {
         bluetooth.configure(pke: model.vehicle?.carCode ?? "", mcu: model.vehicle?.mcuID ?? "")
     }
 
+    private func checkBluetoothPassword() {
+        let candidate = bluetoothPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        bluetoothPassword = ""
+        Task {
+            do {
+                try await bluetooth.verifyPassword(candidate)
+                model.message = "รหัส Bluetooth ถูกต้องและบันทึกแล้ว กดสั่งงานรถอีกครั้งได้เลย"
+            } catch ZontesError.bluetoothPasswordRejected {
+                model.message = "รหัส Bluetooth ไม่ถูกต้อง กดสั่งงานอีกครั้งเพื่อกรอกรหัสใหม่"
+            } catch {
+                model.message = error.localizedDescription
+            }
+        }
+    }
+
     private func bluetoothAction(_ command: VehicleCommand) -> some View {
         Button { pendingCommand = command } label: {
             Label(command.title, systemImage: command.systemImage)
@@ -249,7 +282,7 @@ private struct VehicleDashboardView: View {
                 .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
-        .disabled(!bluetooth.status.isPositive || bluetooth.commandInProgress != nil)
+        .disabled(!bluetooth.status.isPositive || bluetooth.isBusy)
     }
 
     private var header: some View {
@@ -328,7 +361,7 @@ private struct VehicleDashboardView: View {
                 .blur(radius: 18)
                 .offset(y: 70)
 
-            if let url = model.vehicle?.imageURL {
+            if let url = model.vehicleImageURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case let .success(image):
@@ -345,6 +378,18 @@ private struct VehicleDashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 235)
+        .contentShape(Rectangle())
+        .onTapGesture { showsStylePicker = true }
+        .overlay(alignment: .bottomTrailing) {
+            Button { showsStylePicker = true } label: {
+                Image(systemName: "paintpalette.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("เลือกรุ่นและสีรถ")
+        }
     }
 
     private var vehiclePlaceholder: some View {
@@ -376,13 +421,13 @@ private struct VehicleDashboardView: View {
             }
             .offset(y: -82)
 
-            WheelButton(title: "Lock", systemImage: "lock.fill", accent: .cyan, isWorking: model.commandInProgress == .lock) {
+            WheelButton(title: "Lock", systemImage: "lock.fill", accent: .cyan, isWorking: bluetooth.commandInProgress == .lock) {
                 pendingCommand = .lock
             }
             .disabled(!bluetooth.status.isPositive)
             .offset(x: -82)
 
-            WheelButton(title: "Unlock", systemImage: "lock.open.fill", isWorking: model.commandInProgress == .unlock) {
+            WheelButton(title: "Unlock", systemImage: "lock.open.fill", isWorking: bluetooth.commandInProgress == .unlock) {
                 pendingCommand = .unlock
             }
             .disabled(!bluetooth.status.isPositive)
@@ -405,7 +450,7 @@ private struct VehicleDashboardView: View {
             .overlay { Circle().stroke(.white.opacity(0.12)) }
         }
         .frame(width: 252, height: 252)
-        .disabled(model.commandInProgress != nil || bluetooth.commandInProgress != nil)
+        .disabled(model.commandInProgress != nil || bluetooth.isBusy)
     }
 
     private var wheelDivider: some View {
@@ -426,6 +471,122 @@ private struct VehicleDashboardView: View {
         Text(model.vehicle?.updatedAt.isEmpty == false ? "อัปเดตล่าสุด \(model.vehicle?.updatedAt ?? "")" : "ดึงลงเพื่อรีเฟรชข้อมูล")
             .font(.caption2)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// The official app shows the model and colour chosen while binding, which only that phone
+/// knows; this lets the owner pick the same artwork from the same catalog.
+private struct VehicleStylePicker: View {
+    @EnvironmentObject private var model: ZontesAppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var loadError: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if model.motorCatalog.isEmpty {
+                    VStack(spacing: 14) {
+                        if let loadError {
+                            Text(loadError)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("ลองอีกครั้ง") { Task { await load() } }
+                        } else {
+                            ProgressView("กำลังโหลดรุ่นรถ…")
+                        }
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        Section {
+                            Button {
+                                model.selectStyle(nil)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text("ใช้ภาพจากบัญชี ZONTES")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if model.selectedStyle == nil {
+                                        Image(systemName: "checkmark").foregroundStyle(.cyan)
+                                    }
+                                }
+                            }
+                        } footer: {
+                            Text("เลือกรุ่นและสีให้ตรงกับที่เลือกไว้ตอนผูกรถในแอป ZONTES Smart")
+                        }
+
+                        ForEach(orderedCategories) { category in
+                            Section(category.name) {
+                                ForEach(category.styles) { style in
+                                    Button {
+                                        model.selectStyle(style)
+                                        dismiss()
+                                    } label: {
+                                        styleRow(style)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .background(Color.black)
+            .scrollContentBackground(.hidden)
+            .navigationTitle("รุ่นและสีรถ")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("ปิด") { dismiss() }
+                }
+            }
+            .task { await load() }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    /// The family whose artwork the account already uses comes first.
+    private var orderedCategories: [MotorCategory] {
+        var categories = model.motorCatalog
+        let current = model.vehicle?.imageURL?.lastPathComponent
+        if let current, let index = categories.firstIndex(where: { category in
+            category.styles.contains { $0.imageURL.lastPathComponent == current }
+        }) {
+            let match = categories.remove(at: index)
+            categories.insert(match, at: 0)
+        }
+        return categories
+    }
+
+    private func styleRow(_ style: MotorStyle) -> some View {
+        HStack(spacing: 14) {
+            AsyncImage(url: style.thumbnailURL ?? style.imageURL) { image in
+                image.resizable().scaledToFit()
+            } placeholder: {
+                Color.white.opacity(0.05)
+            }
+            .frame(width: 76, height: 58)
+
+            Text(style.name)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+            if model.selectedStyle?.id == style.id {
+                Image(systemName: "checkmark").foregroundStyle(.cyan)
+            }
+        }
+    }
+
+    private func load() async {
+        loadError = nil
+        do {
+            try await model.loadMotorCatalog()
+        } catch {
+            loadError = error.localizedDescription
+        }
     }
 }
 

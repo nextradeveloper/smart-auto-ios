@@ -4,7 +4,15 @@ import Foundation
 @MainActor
 final class ZontesAppModel: ObservableObject {
     @Published private(set) var session: ZontesSession?
-    @Published private(set) var vehicle: VehicleSnapshot?
+    @Published private(set) var vehicle: VehicleSnapshot? {
+        didSet {
+            guard oldValue?.carCode != vehicle?.carCode else { return }
+            selectedStyle = vehicle.flatMap { VehicleStyleStore.load(pke: $0.carCode) }
+        }
+    }
+    /// Model and colour the owner picked, matching the artwork in the official app.
+    @Published private(set) var selectedStyle: MotorStyle?
+    @Published private(set) var motorCatalog: [MotorCategory] = []
     @Published private(set) var isBusy = false
     @Published private(set) var busyText = ""
     @Published private(set) var commandInProgress: VehicleCommand?
@@ -71,8 +79,23 @@ final class ZontesAppModel: ObservableObject {
         }
     }
 
+    var vehicleImageURL: URL? { selectedStyle?.imageURL ?? vehicle?.imageURL }
+
+    func loadMotorCatalog() async throws {
+        guard motorCatalog.isEmpty else { return }
+        motorCatalog = try await ZontesAPI.shared.motorCatalog()
+    }
+
+    /// nil goes back to the account's artwork.
+    func selectStyle(_ style: MotorStyle?) {
+        guard let pke = vehicle?.carCode, !pke.isEmpty else { return }
+        VehicleStyleStore.save(style, pke: pke)
+        selectedStyle = style
+    }
+
     func logout() {
         ZontesSessionStore.clear()
+        BluetoothPasswordStore.clearAll()
         session = nil
         vehicle = nil
         message = nil

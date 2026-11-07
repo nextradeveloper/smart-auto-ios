@@ -42,6 +42,24 @@ struct VehicleSnapshot: Equatable {
     }
 }
 
+/// One model and colour from the artwork catalog behind the official app's bind screen.
+struct MotorStyle: Identifiable, Equatable, Codable {
+    let itemCode: String
+    let name: String
+    let category: String
+    let imageURL: URL
+    let thumbnailURL: URL?
+
+    var id: String { itemCode }
+}
+
+struct MotorCategory: Identifiable, Equatable {
+    let name: String
+    let styles: [MotorStyle]
+
+    var id: String { name }
+}
+
 enum VehicleCommand: String, Identifiable, CaseIterable {
     case lock
     case unlock
@@ -80,6 +98,7 @@ enum ZontesError: LocalizedError {
     case commandTimedOut
     case commandRejected
     case commandConnectionClosed
+    case bluetoothPasswordRejected
 
     var errorDescription: String? {
         switch self {
@@ -97,6 +116,8 @@ enum ZontesError: LocalizedError {
             return "รถปฏิเสธคำสั่ง กรุณารีเฟรชสถานะรถแล้วลองใหม่"
         case .commandConnectionClosed:
             return "การเชื่อมต่อระบบควบคุมรถถูกตัดก่อนรถตอบรับ"
+        case .bluetoothPasswordRejected:
+            return "รหัส Bluetooth ของรถไม่ถูกต้อง"
         }
     }
 }

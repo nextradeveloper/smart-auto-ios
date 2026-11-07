@@ -73,8 +73,10 @@ final class ZontesAPI {
         }
 
         let imageBase = string(json, "imgPath", fallback: "https://www.sharpon.com/Tayoimg")
-        // IndexImg is the vehicle artwork used by the official app. NameImg can be a
-        // model-name graphic (for example, a large “G368” wordmark), not a motorcycle.
+        // IndexImg is the account's vehicle artwork. NameImg can be a model-name graphic (for
+        // example, a large “G368” wordmark), not a motorcycle. The official app shows the model
+        // and colour picked while binding instead, which only that phone knows; the owner can
+        // pick the same one from motorCatalog().
         let imageName = string(car, "IndexImg", fallback: string(car, "NameImg"))
         let locationJSON = array(json["CarLocation"]).first.flatMap { dictionary($0) }
         let rawVoltage = double(car, "Voltage")
@@ -102,6 +104,60 @@ final class ZontesAPI {
                 return VehicleLocation(latitude: latitude, longitude: longitude)
             }
         )
+    }
+
+    /// Model and colour artwork offered by the official app's bind screen. The official app
+    /// asks with the model-family code from the PKE's QR label; the service groups those codes
+    /// by tens, and 001, 010 and 020 cover every family it lists.
+    func motorCatalog() async throws -> [MotorCategory] {
+        async let gSeries = try? motorCategories(code: "020")
+        async let large = try? motorCategories(code: "001")
+        async let scooters = try? motorCategories(code: "010")
+        let groups = [await gSeries, await large, await scooters].compactMap { $0 }
+        guard !groups.isEmpty else {
+            throw ZontesError.message("โหลดรายการรุ่นรถไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่")
+        }
+        var seen = Set<String>()
+        return groups.flatMap { $0 }.filter { seen.insert($0.name).inserted }
+    }
+
+    private func motorCategories(code: String) async throws -> [MotorCategory] {
+        let url = URL(string: "https://tayo.zontesmotor.com/zontespkeapp/api/GX/PKE/MotorImg/getMotorType/\(code)")!
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              optionalInt(json, "code") == 200
+        else { throw ZontesError.invalidResponse }
+
+        return array(json["data"]).compactMap { dictionary($0) }.compactMap { category -> MotorCategory? in
+            let name = string(category, "categoryType").trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = string(category, "imagePath")
+            var seen = Set<String>()
+            let styles = array(category["gxpkeMotorImgs"]).compactMap { dictionary($0) }.compactMap { item -> MotorStyle? in
+                let itemCode = string(item, "itemCode")
+                guard !itemCode.isEmpty, seen.insert(itemCode).inserted,
+                      let image = catalogImageURL(base: base, name: string(item, "indexImg"))
+                else { return nil }
+                let title = string(item, "enItemName", fallback: string(item, "itemName"))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return MotorStyle(
+                    itemCode: itemCode,
+                    name: title.isEmpty ? itemCode : title,
+                    category: name,
+                    imageURL: image,
+                    thumbnailURL: catalogImageURL(base: base, name: string(item, "smallImg"))
+                )
+            }
+            return name.isEmpty || styles.isEmpty ? nil : MotorCategory(name: name, styles: styles)
+        }
+    }
+
+    private func catalogImageURL(base: String, name: String) -> URL? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        if let absolute = URL(string: name), absolute.scheme != nil { return absolute }
+        let cleanBase = base.isEmpty ? "https://www.sharpon.com/Tayoimg/GX/Box/MotorPic" : base
+        return URL(string: cleanBase.hasSuffix("/") ? cleanBase + name : cleanBase + "/" + name)
     }
 
     private func post(_ path: String, form: [String: String]) async throws -> [String: Any] {
