@@ -240,7 +240,7 @@ final class VideoPipeline {
 
         if rotation == nil {
             var session: VTPixelRotationSession?
-            VTPixelRotationSessionCreate(allocator: nil, pixelRotationSessionOut: &session)
+            VTPixelRotationSessionCreate(nil, &session)
             rotation = session
         }
         guard let rotation else { return nil }

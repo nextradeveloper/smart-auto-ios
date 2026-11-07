@@ -64,7 +64,7 @@ final class DashSession {
         lock.unlock()
         if let session {
             do {
-                try session.stopSession()
+                try session.stop()
             } catch {
                 log("StopSession: \(error.localizedDescription)")
             }
@@ -170,12 +170,12 @@ final class DashSession {
         do {
             try session.setECHost(ApiNewStreamHost(endpoint.host, String(endpoint.port), endpoint.probePackage))
             // Blocks until the dash's first PXC heartbeat, or 25 s.
-            try session.startSession()
+            try session.start()
         } catch {
             log("StartSession failed: \(error.localizedDescription)")
             emit(.state(.reconnecting, "จอไม่ตอบรับการเชื่อมต่อ: \(error.localizedDescription)"))
             // Releases the 10920-10922 listeners; this session object is discarded anyway.
-            try? session.stopSession()
+            try? session.stop()
             clear(generation: myGeneration)
             return
         }
@@ -185,7 +185,7 @@ final class DashSession {
         if stillWanted { linkUp = true }
         lock.unlock()
         guard stillWanted else {
-            try? session.stopSession()
+            try? session.stop()
             clear(generation: myGeneration)
             return
         }
