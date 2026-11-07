@@ -1,0 +1,95 @@
+# XcodeGen spec. CI runs `xcodegen generate` on macOS; the .xcodeproj is never committed.
+name: SmartAuto
+options:
+  bundleIdPrefix: com.nextradeveloper
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    SUPPORTS_MACCATALYST: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    LOCALIZATION_PREFERS_STRING_CATALOGS: NO
+targets:
+  SmartAuto:
+    type: application
+    platform: iOS
+    sources:
+      - path: SmartAuto
+      - path: Shared
+    info:
+      path: SmartAuto/Info.plist
+      properties:
+        CFBundleDisplayName: Smart Auto
+        CFBundleDevelopmentRegion: th
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocalNetworkUsageDescription: Smart Auto ต้องคุยกับจอรถผ่าน Wi-Fi ของรถเพื่อส่งภาพขึ้นจอ
+        NSBonjourServices:
+          - _EasyConn._tcp
+        ITSAppUsesNonExemptEncryption: false
+    entitlements:
+      path: SmartAuto/SmartAuto.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.nextradeveloper.smartauto
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto
+        PRODUCT_NAME: SmartAuto
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: SmartAutoBroadcast
+      - sdk: ReplayKit.framework
+
+  SmartAutoBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SmartAutoBroadcast
+      - path: Shared
+    info:
+      path: SmartAutoBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: Smart Auto
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSLocalNetworkUsageDescription: Smart Auto ต้องคุยกับจอรถผ่าน Wi-Fi ของรถเพื่อส่งภาพขึ้นจอ
+        NSBonjourServices:
+          - _EasyConn._tcp
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    entitlements:
+      path: SmartAutoBroadcast/SmartAutoBroadcast.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.nextradeveloper.smartauto
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto.broadcast
+        PRODUCT_NAME: SmartAutoBroadcast
+        # The Go runtime inside Api.xcframework resolves DNS through libresolv.
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lresolv
+    dependencies:
+      # Built by CI from hudlib/ with `gomobile bind -target=ios`.
+      - framework: Frameworks/Api.xcframework
+        embed: false
+      - sdk: ReplayKit.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: Security.framework

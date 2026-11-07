@@ -1,0 +1,75 @@
+name: iOS build
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hudlib/go.mod
+          cache-dependency-path: hudlib/go.sum
+
+      - name: Build Api.xcframework (gomobile)
+        working-directory: hudlib
+        run: |
+          set -euo pipefail
+          # Same x/mobile revision as hudlib/go.mod, so gobind matches the bind package.
+          MOBILE=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go install golang.org/x/mobile/cmd/gomobile@"$MOBILE"
+          go install golang.org/x/mobile/cmd/gobind@"$MOBILE"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          gomobile init || true
+          go vet ./hud/api
+          gomobile bind -target=ios -iosversion=16.0 -o ../Frameworks/Api.xcframework ./hud/api
+          find ../Frameworks/Api.xcframework -name '*.h' | head -20
+          cat "$(find ../Frameworks/Api.xcframework -name 'Api.objc.h' | head -1)"
+
+      - name: Go tests (informational)
+        continue-on-error: true
+        working-directory: hudlib
+        run: go test ./hud/...
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned, device)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -project SmartAuto.xcodeproj \
+            -scheme SmartAuto \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            build 2>&1 | tee build/xcodebuild.log | grep -E 'error:|warning: .*(SmartAuto|Shared)|BUILD (SUCCEEDED|FAILED)' || true
+          grep -q 'BUILD SUCCEEDED' build/xcodebuild.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore

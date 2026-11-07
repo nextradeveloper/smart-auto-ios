@@ -1,0 +1,56 @@
+package net
+
+import (
+	"net"
+	"sync"
+)
+
+type ConnTracker struct {
+	mu          sync.Mutex
+	connections map[net.Conn]struct{}
+}
+
+func NewConnTracker() *ConnTracker {
+	return &ConnTracker{
+		connections: make(map[net.Conn]struct{}),
+	}
+}
+
+func (t *ConnTracker) Add(conn net.Conn) {
+	t.mu.Lock()
+	t.connections[conn] = struct{}{}
+	t.mu.Unlock()
+}
+
+func (t *ConnTracker) Remove(conn net.Conn) {
+	t.mu.Lock()
+	delete(t.connections, conn)
+	t.mu.Unlock()
+}
+
+// Others counts the connections this tracker is still serving apart from the
+// one given. A per-connection failure is only the end of the service when this
+// is zero: the bike opens some of these ports more than once (see the note at
+// the top of pxc.go) and abandons the channel it has nothing to say on, so the
+// first socket to die is routinely not the last one alive.
+func (t *ConnTracker) Others(conn net.Conn) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	others := 0
+	for c := range t.connections {
+		if c != conn {
+			others++
+		}
+	}
+	return others
+}
+
+func (t *ConnTracker) CloseAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for c := range t.connections {
+		_ = c.Close()
+	}
+}
