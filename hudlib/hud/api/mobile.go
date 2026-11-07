@@ -156,9 +156,9 @@ type MobileConfig struct {
 	ClientInfoSupportFunction bool
 }
 
-func NewMobileConfig(static []byte, fps int, startupTimeoutSec, teardownTimeoutSec, discTimeout, discTries int) *MobileConfig {
+func NewMobileConfig(staticSignal []byte, fps int, startupTimeoutSec, teardownTimeoutSec, discTimeout, discTries int) *MobileConfig {
 	return &MobileConfig{
-		StaticSignal:        static,
+		StaticSignal:        staticSignal,
 		TargetFPS:           fps,
 		StartupTimeoutSec:   startupTimeoutSec,
 		TeardownTimeoutSec:  teardownTimeoutSec,

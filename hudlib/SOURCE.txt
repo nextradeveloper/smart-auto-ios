@@ -1,3 +1,4 @@
 source: ridedaemon-lib fork, branch smart-auto/client-identity, commit 3b4be3c6273d2803ee9cd99291c9e962cb6aa750
 Removed from the snapshot: static/ (35 MB sample H.264, only read by cmd/hud-desktop) and docs/.
 Added: hud/api/memory.go (SetMemoryLimit / FreeMemory for the 50 MB iOS broadcast extension).
+Changed: NewMobileConfig's first parameter renamed static -> staticSignal ('static' is an Objective-C keyword and broke gomobile's iOS binding).
