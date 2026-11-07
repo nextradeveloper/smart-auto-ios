@@ -29,7 +29,18 @@ func TestCaptureReplyAnnouncesTheRelayedStreamSize(t *testing.T) {
 	if encoder := binary.LittleEndian.Uint32(payload[0:4]); encoder != mediaEncoderH264 {
 		t.Fatalf("encoder %d, the override must not touch it", encoder)
 	}
-	if payload[8] != 0 {
-		t.Fatalf("extended-protocol byte %d, must stay the dash's own", payload[8])
+	// A dash without the extend protocol gets the official app's 8-byte reply (upstream
+	// ee609e5); the override must not change that shape.
+	if len(payload) != 8 {
+		t.Fatalf("reply is %d bytes, want 8 for supportExtendProtocol=0", len(payload))
+	}
+}
+
+func TestCaptureOverrideKeepsTheExtendByteWhenTheDashHasIt(t *testing.T) {
+	request := captureRequest(1280, 535)
+	request[29] = 1
+	payload := buildMediaCaptureAckPayloadSized(request, false, 1920, 720)
+	if len(payload) != 9 || payload[8] != 1 {
+		t.Fatalf("reply %x, want 9 bytes ending in the dash's extend byte 1", payload)
 	}
 }

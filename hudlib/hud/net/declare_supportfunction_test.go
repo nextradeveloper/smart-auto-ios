@@ -29,7 +29,15 @@ func TestDeclareSupportFunctionEcho(t *testing.T) {
 	s2.HudConfig = &HUDConfig{HUID: "abc", SupportFunction: 128}
 	_ = s2.buildPC()
 	b2, _ := json.Marshal(s2.PhoneConfig)
-	if strings.Contains(string(b2), "supportFunction") {
-		t.Fatalf("default reply must not carry supportFunction: %s", b2)
+	js2 := string(b2)
+	// Upstream (ee609e5) states supportFunction in every reply, with the host's own value;
+	// only the echo adds the two Java-SDK fields.
+	if !strings.Contains(js2, `"supportFunction":0`) {
+		t.Fatalf("default reply must state the host's supportFunction: %s", js2)
+	}
+	for _, unwanted := range []string{"supportFunctionEx", "haveSysScreenInSetting"} {
+		if strings.Contains(js2, unwanted) {
+			t.Fatalf("default reply must not carry %s: %s", unwanted, js2)
+		}
 	}
 }

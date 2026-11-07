@@ -112,6 +112,32 @@ type MobileConfig struct {
 	// host must be pushing stills through PushStill when this is on; nothing here
 	// transcodes. Off for every dashboard but the one the experiment is aimed at.
 	JpegStillsEnabled bool
+	// AppStatusNotifyEnabled makes the phone push ECP_P2C_APPSTATUS_BACKGROUND the way
+	// the official EasyConn app does: once when PXC comes up, and again - as "the
+	// mirror is live" - when the dash starts pulling frames. It is the only statement
+	// the official app ever volunteers that a mirror exists, and no reference
+	// implementation sends it. Off for every dashboard that paints a picture today.
+	// See net.PXCControl.SetAppStatusNotify.
+	AppStatusNotifyEnabled bool
+	// PhoneScreenWidth, PhoneScreenHeight and PhoneScreenRotation are the phone's own
+	// display metrics, carried inside that notification exactly as the official app
+	// reads them off Display.getRealSize() and getRotation(). Only the host can know
+	// them; zero is sent as zero rather than guessed.
+	PhoneScreenWidth    int
+	PhoneScreenHeight   int
+	PhoneScreenRotation int
+	// AppStatusTouchInput sets enableAccessibility in that notification: the host
+	// forwards the dash's touches, the way the official app does through its
+	// accessibility service. Only meaningful with AppStatusNotifyEnabled.
+	AppStatusTouchInput bool
+	// AppStatusLiveOnly sends only the "mirror is live" notification, never the one
+	// when PXC comes up: the CFMOTO app's behaviour. See
+	// net.PXCControl.SetAppStatusLiveOnly.
+	AppStatusLiveOnly bool
+	// CfmotoAppReplies answers two PXC questions the way the CFMOTO app does: no
+	// supportFunction in the CLIENT_INFO reply, and {"status":0} to
+	// CHECK_APP_NETWORKING_CAPABILITY. See net.PXCControl.SetCfmotoAppReplies.
+	CfmotoAppReplies bool
 	// TimeZoneID is the host's IANA zone id ("Europe/Rome"), sent in the
 	// QUERY_TIME reply. Android must supply it: Go's local location carries no
 	// usable name on a device. Empty falls back to a fixed-offset id.
@@ -262,6 +288,10 @@ func NewMobileSession(cfg *MobileConfig, cb MobileCallback) (*MobileSession, err
 	ms.hud.SetClientVersion(cfg.ClientVersionCode, cfg.ClientVersionFingerprint)
 	ms.hud.SetPhoneOsVersion(cfg.PhoneOsVersion)
 	ms.hud.SetClientInfoSupportFunction(cfg.ClientInfoSupportFunction)
+	ms.hud.SetAppStatusNotify(cfg.AppStatusNotifyEnabled)
+	ms.hud.SetAppStatusLiveOnly(cfg.AppStatusLiveOnly)
+	ms.hud.SetCfmotoAppReplies(cfg.CfmotoAppReplies)
+	ms.hud.SetPhoneScreen(cfg.PhoneScreenWidth, cfg.PhoneScreenHeight, cfg.PhoneScreenRotation, cfg.AppStatusTouchInput)
 	ms.hud.SetCaptureSize(cfg.CaptureWidth, cfg.CaptureHeight)
 	ms.hud.SetTimeZoneID(cfg.TimeZoneID)
 	// Only together with the id: an offset on its own would silently pin the

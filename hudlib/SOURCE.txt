@@ -1,9 +1,7 @@
-source: ridedaemon-lib fork, branch smart-auto/client-identity, commit 3b4be3c6273d2803ee9cd99291c9e962cb6aa750
+source: ridedaemon-lib fork (local D:/Project/ridedaemon-lib), branch smart-auto/ios-upstream-merge,
+commit 524ccff1e0b268557642d89e688160b7c6cba749
+  = upstream vincenzobpt/ridedaemon-lib master 8b62394 (2026-11-04)
+  + smart-auto/client-identity (client identity/version, supportFunction echo for profile G)
+  + iOS host support (PassthroughMode, CaptureWidth/Height, EventNeedIDR, staticSignal rename,
+    SetMemoryLimit/FreeMemory).
 Removed from the snapshot: static/ (35 MB sample H.264, only read by cmd/hud-desktop) and docs/.
-Added: hud/api/memory.go (SetMemoryLimit / FreeMemory for the 50 MB iOS broadcast extension).
-Changed: NewMobileConfig's first parameter renamed static -> staticSignal ('static' is an Objective-C keyword and broke gomobile's iOS binding).
-Added (CarPlay direct): MobileConfig.PassthroughMode / CaptureWidth / CaptureHeight and EventNeedIDR;
-  LiveStreamSource.SetPassthrough (no idle reset, no repeats, one poll takes every queued AU,
-  overflow restarts at an IDR and asks the host for one); MediaControl.CaptureWidth/Height and
-  CfmotoHUD.SetCaptureSize override the size announced in the capture reply. Tests:
-  hud/stream/passthrough_test.go, hud/net/capture_size_test.go.

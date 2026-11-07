@@ -154,6 +154,14 @@ final class DashSession {
         config.passthroughMode = options.passthrough
         config.captureWidth = options.captureWidth
         config.captureHeight = options.captureHeight
+        if profile.announceMirrorState {
+            config.appStatusNotifyEnabled = true
+            // The official app reports the phone's own display; what this phone shows the dash
+            // is the stream, so report that, upright.
+            config.phoneScreenWidth = options.captureWidth > 0 ? options.captureWidth : profile.fallbackWidth
+            config.phoneScreenHeight = options.captureHeight > 0 ? options.captureHeight : profile.fallbackHeight
+            config.phoneScreenRotation = 0
+        }
         return config
     }
 

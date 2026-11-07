@@ -54,6 +54,13 @@ const TransportCmdVideoPulls = 2
 // on each one, so "it lit up" can be matched to the command that preceded it.
 const TransportCmdPageSwitchProbe = 3
 
+// TransportCmdAppStatusNotify reports one ECP_P2C_APPSTATUS_BACKGROUND this session put
+// on the wire: the mode in the first byte, 1 in the second if the write reached the
+// socket. See hud/net/appstatus.go for why the phone sends it at all. The dash's own
+// 0x20031 acknowledgement is not this event - it arrives through the PXC event stream
+// like any other response, which is what makes it worth reading.
+const TransportCmdAppStatusNotify = 4
+
 type HudEvent struct {
 	Source HudEventSource
 	Time   time.Time
@@ -78,17 +85,22 @@ type CfmotoHUD struct {
 	running bool
 
 	// Config
-	host                   *EcHost
-	targetFPS              int
-	packageName            string
-	phoneUUID              uuid.UUID
-	phoneConfig            *net.PhoneConfig
+	host        *EcHost
+	targetFPS   int
+	packageName string
+	phoneUUID   uuid.UUID
+	phoneConfig *net.PhoneConfig
+	// declareSupportFunction: see SetClientInfoSupportFunction (smart-auto fork).
 	declareSupportFunction bool
 	supportFunction        int
 	proactivePxcHeartbeat  bool
 	plainVideoFraming      bool
 	pageSwitchProbe        bool
 	jpegStills             bool
+	appStatusNotify        bool
+	appStatusLiveOnly      bool
+	cfmotoAppReplies       bool
+	phoneScreen            net.PhoneScreen
 	captureWidth           int
 	captureHeight          int
 	timeZoneID             string
@@ -138,6 +150,7 @@ func NewCfmotoHUD(targetFPS int, mux *stream.MuxSource, supportFunction int) *Cf
 			EncryptedHUID:         "", // Done inside PXC
 			BluetoothName:         "Pixel 6a",
 			SupportH264IFrame:     true,
+			SupportFunction:       supportFunction,
 			AppVersionFingerPrint: "V:2.2.1(121)--ONLINE",
 		},
 		targetFPS: targetFPS,
@@ -235,6 +248,42 @@ func (hud *CfmotoHUD) SetJpegStills(enabled bool) {
 	hud.mu.Lock()
 	defer hud.mu.Unlock()
 	hud.jpegStills = enabled
+}
+
+// SetAppStatusNotify makes the phone announce its mirroring state to the head unit the
+// way the official app does - once when PXC comes up, and again when the dash starts
+// pulling frames. Off by default; configure it before StartStream. See
+// hud/net/appstatus.go.
+func (hud *CfmotoHUD) SetAppStatusNotify(enabled bool) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.appStatusNotify = enabled
+}
+
+// SetAppStatusLiveOnly keeps that notification to mode 1, the only one the CFMOTO app
+// sends. Configure it before StartStream. See net.PXCControl.SetAppStatusLiveOnly.
+func (hud *CfmotoHUD) SetAppStatusLiveOnly(liveOnly bool) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.appStatusLiveOnly = liveOnly
+}
+
+// SetCfmotoAppReplies makes the CLIENT_INFO and CHECK_APP_NETWORKING_CAPABILITY replies
+// match the CFMOTO app. Configure it before StartStream. See
+// net.PXCControl.SetCfmotoAppReplies.
+func (hud *CfmotoHUD) SetCfmotoAppReplies(enabled bool) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.cfmotoAppReplies = enabled
+}
+
+// SetPhoneScreen supplies the display metrics that notification carries, and whether the
+// host acts on the dash's touches. Only the host can know them. Configure it before
+// StartStream.
+func (hud *CfmotoHUD) SetPhoneScreen(width, height, rotation int, touchInput bool) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.phoneScreen = net.PhoneScreen{Width: width, Height: height, Rotation: rotation, TouchInput: touchInput}
 }
 
 // SetCaptureSize fixes the geometry announced in the capture reply instead of echoing the
@@ -504,6 +553,23 @@ func (hud *CfmotoHUD) startStream(ctx context.Context, initConn stdnet.Conn) (er
 			Data:   payload,
 		})
 	}
+	pxcServer.SetAppStatusNotify(hud.appStatusNotify)
+	pxcServer.SetAppStatusLiveOnly(hud.appStatusLiveOnly)
+	pxcServer.SetCfmotoAppReplies(hud.cfmotoAppReplies)
+	pxcServer.SetPhoneScreen(hud.phoneScreen)
+	pxcServer.OnAppStatus = func(mode int, err error) {
+		payload := make([]byte, 2)
+		payload[0] = byte(mode)
+		if err == nil {
+			payload[1] = 1
+		}
+		hud.handleServerEvent(HudEvent{
+			Source: EventSourceTransport,
+			Time:   time.Now(),
+			Cmd:    TransportCmdAppStatusNotify,
+			Data:   payload,
+		})
+	}
 	pxcServer.SetTimeZoneID(hud.timeZoneID)
 	if hud.timeZoneOffsetSet {
 		pxcServer.SetTimeZoneOffsetSeconds(hud.timeZoneOffsetSec)
@@ -528,6 +594,10 @@ func (hud *CfmotoHUD) startStream(ctx context.Context, initConn stdnet.Conn) (er
 	mediaControl.OnVideoStart = func() {
 		hud.muxSource.PrepareLiveConsumer()
 		pxcServer.StartPageSwitchProbe()
+		// The official app's second APPSTATUS_BACKGROUND goes out from setTrueMirror(),
+		// once REQ_RV_DATA_START has been answered 113. This is that instant on our
+		// side: the dash has asked for the stream and the live consumer is armed.
+		pxcServer.SendAppStatus(net.AppStatusMirrorLive)
 	}
 	// -- maybe we could change chunkStep to something smaller to reduce latency?
 	mediaStream := net.NewMediaStream(":10920", hud.muxSource, 0x1000, 3*time.Millisecond)

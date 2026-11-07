@@ -48,6 +48,10 @@ const (
 	// The other clock question, answered with JSON instead of a binary stamp.
 	// Firmware picks one or the other, never both: see querytime.go.
 	PxcQueryTime uint32 = 0x10450
+	// ECP_C2P_CHECK_APP_NETWORKING_CAPABILITY. The 1000 MT-X asks it every two seconds
+	// for as long as the session lives. The official app answers {"status":0|1}; the
+	// default branch below answers with an empty body. See SetCfmotoAppReplies.
+	PxcCheckAppNetworking uint32 = 0x10750
 )
 
 // Command responses
@@ -61,6 +65,8 @@ const (
 	PxcCheckSnDone   uint32 = PxcCheckSnResult + 1
 	PxcHuTimeSyncAck uint32 = PxcHuTimeSync + 1
 	PxcQueryTimeAck  uint32 = PxcQueryTime + 1
+
+	PxcCheckAppNetworkingAck uint32 = PxcCheckAppNetworking + 1
 )
 
 type checkSnRequest struct {
@@ -158,13 +164,19 @@ type PhoneConfig struct {
 	EncryptedHUID     string `json:"encryptedHUID"`
 	BluetoothName     string `json:"bluetoothName"`
 	SupportH264IFrame bool   `json:"supportH264IFrame"`
-	// The three fields below are what the EasyConn Java SDK (net.easyconn.carman
-	// ECP_C2P_CLIENT_INFO.reply, read from the Thai ZONTES app 1.12) adds to this
-	// reply and this daemon never did: the dash's own supportFunction echoed back
-	// (plus supportFunctionEx, 0 when the dash declared none) and
-	// haveSysScreenInSetting. Pointers so that, unless a host asks for them, the
-	// JSON every painting dashboard was proven with is byte-for-byte unchanged.
-	SupportFunction        *int   `json:"supportFunction,omitempty"`
+	// The official app always states a supportFunction in this reply
+	// (ECP_C2P_CLIENT_INFO.g0(), which writes it unless the caller has already supplied
+	// one), and so does open-cflink's captured handshake. This daemon did not, and the
+	// value it does compute went only into the RLY for MEDIA_CONTROL 0x60 - which
+	// firmware that runs supportExtendProtocol=0 never asks for, so on those units the
+	// number was never stated at all.
+	// The CFMOTO app is the exception: its build of the SDK writes supportFunction only
+	// when the caller passes a map, and that app passes none. See OmitSupportFunction.
+	SupportFunction int `json:"supportFunction"`
+	// smart-auto fork: the EasyConn Java SDK (read from the Thai ZONTES app 1.12) also
+	// writes supportFunctionEx and haveSysScreenInSetting next to supportFunction. Set
+	// only with PXCControl.DeclareSupportFunction, which also makes supportFunction the
+	// dash's own value echoed back; otherwise the reply is upstream's.
 	SupportFunctionEx      *int64 `json:"supportFunctionEx,omitempty"`
 	HaveSysScreenInSetting *bool  `json:"haveSysScreenInSetting,omitempty"`
 	// There is deliberately no supportSyncCorrectTime here. It was added on
@@ -180,6 +192,24 @@ type PhoneConfig struct {
 	// the work is what caused harm. Do not re-add this without a rider log
 	// showing a dash that stays silent until it is claimed.
 	AppVersionFingerPrint string `json:"appVersionFingerPrint"`
+	// OmitSupportFunction leaves supportFunction out of this reply. The CFMOTO app
+	// (jadx-225) calls ECP_C2P_CLIENT_INFO.reply() with no map, and reply() only writes
+	// supportFunction when a caller map is given - so that app never states it. Set by
+	// SetCfmotoAppReplies.
+	OmitSupportFunction bool `json:"-"`
+}
+
+// MarshalJSON drops supportFunction when OmitSupportFunction is set; otherwise the
+// reply is the plain struct encoding it always was.
+func (c PhoneConfig) MarshalJSON() ([]byte, error) {
+	type plain PhoneConfig
+	if !c.OmitSupportFunction {
+		return json.Marshal(plain(c))
+	}
+	return json.Marshal(struct {
+		plain
+		SupportFunction *int `json:"supportFunction,omitempty"`
+	}{plain: plain(c)})
 }
 
 type PXCControl struct {
@@ -208,6 +238,7 @@ type PXCControl struct {
 	timeZoneOffsetSet  bool
 	skipDashClockSync  bool
 	dashAsksForTime    bool
+	cfmotoAppReplies   bool
 
 	queryTimeMu            sync.Mutex
 	queryTimeAnswered      bool
@@ -224,6 +255,13 @@ type PXCControl struct {
 	// can decline to run, so a rider's log says which command was on the wire when the
 	// panel did or did not move.
 	OnPageSwitchProbe func(step PageSwitchProbeStep, command uint32, err error)
+
+	// The phone-to-car mirroring notification; see appstatus.go.
+	appStatus appStatusState
+	// OnAppStatus reports each ECP_P2C_APPSTATUS_BACKGROUND this session put on the
+	// wire, so a rider's log carries the mode and whether the write landed. The dash's
+	// own 0x20031 ack arrives separately, through the unhandled-response branch.
+	OnAppStatus func(mode int, err error)
 }
 
 type pxcConnectionState struct {
@@ -249,6 +287,19 @@ func NewPXCControl(port string, kp *KeyPair, config *PhoneConfig) *PXCControl {
 		Errors:      make(chan error, 16),
 		KeyPair:     kp,
 		PhoneConfig: config,
+	}
+}
+
+// SetCfmotoAppReplies makes two replies match the CFMOTO app byte for byte: the
+// CLIENT_INFO reply without supportFunction, and CHECK_APP_NETWORKING_CAPABILITY
+// answered {"status":0}. That app's own callback never implements the question, so the
+// SDK default false is what goes on the wire. Opt-in, for the dash that paints our
+// picture and never sends us a touch while it sends them to that app. Configure it
+// before Start.
+func (s *PXCControl) SetCfmotoAppReplies(enabled bool) {
+	s.cfmotoAppReplies = enabled
+	if s.PhoneConfig != nil {
+		s.PhoneConfig.OmitSupportFunction = enabled
 	}
 }
 
@@ -577,7 +628,7 @@ func (s *PXCControl) buildPC() error {
 		sf := s.HudConfig.SupportFunction
 		var ex int64 = 0
 		have := true
-		s.PhoneConfig.SupportFunction = &sf
+		s.PhoneConfig.SupportFunction = sf
 		s.PhoneConfig.SupportFunctionEx = &ex
 		s.PhoneConfig.HaveSysScreenInSetting = &have
 	}
@@ -712,6 +763,10 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 			}
 			s.emitEvent(*response)
 			s.maybeScheduleProactiveQueryTime(conn)
+			// The official app sends its first APPSTATUS_BACKGROUND as soon as PXC is
+			// up (vf.s.b0()), before any capture is negotiated. This is that moment:
+			// the handshake the dash opened with has just been answered.
+			s.SendAppStatus(AppStatusBackground)
 		}
 	case PxcSpeedConf:
 		s.emitEvent(*event)
@@ -761,6 +816,17 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 	case PxcCheckSnDone:
 		// The bike acknowledges the phone-originated CHECK_SN_RESULT.
 		s.emitEvent(*event)
+	case PxcCheckAppNetworking:
+		// Without SetCfmotoAppReplies this is exactly the default branch: an empty cmd+1.
+		s.emitEvent(*event)
+		var body []byte
+		if s.cfmotoAppReplies {
+			body = []byte(`{"status":0}`)
+		}
+		response := &PXCResponse{Command: PxcCheckAppNetworkingAck, Body: body}
+		if err := s.writeResponse(response, conn, nil); err != nil {
+			s.emitError(s.connectionError(conn, PxcWriteErr, err))
+		}
 	case PxcHuTimeSync:
 		// Same shape as the default even-command branch - emit, then ACK with
 		// cmd+1 - except the body carries the wall-clock time the dash asked

@@ -16,6 +16,10 @@ struct DashProfile: Identifiable, Equatable {
     let clientVersionFingerprint: String
     let clientInfoSupportFunction: Bool
     let supportFunction: Int
+    /// Push ECP_P2C_APPSTATUS_BACKGROUND (0x20030) as the official EasyConn app does: "connected"
+    /// when PXC comes up, "the picture you are pulling is live" once the dash starts the stream.
+    /// Upstream MOTO-HUB (2026-09-12) turns it on only for dashes that pull frames and paint none.
+    var announceMirrorState = false
 
     // Shared by E, F and G.
     let proactivePxcHeartbeat = true
@@ -41,6 +45,18 @@ struct DashProfile: Identifiable, Equatable {
         supportFunction: 128
     )
 
+    static let zontesH = DashProfile(
+        id: "zontes_368g_h",
+        title: "Zontes 368G (H) - ทดลอง",
+        detail: "เหมือน G และบอกจอว่าภาพ mirror ทำงานแล้ว (คำสั่ง 0x20030 แบบแอป EasyConn ทางการ) ลองเมื่อจอดึงภาพแต่ไม่แสดง",
+        clientPackage: "tayo.com.ZontesIntelligence",
+        clientVersionCode: 3034,
+        clientVersionFingerprint: "V:1.12(3034)--ONLINE",
+        clientInfoSupportFunction: true,
+        supportFunction: 128,
+        announceMirrorState: true
+    )
+
     static let zontesF = DashProfile(
         id: "zontes_368g_f",
         title: "Zontes 368G (F)",
@@ -63,7 +79,7 @@ struct DashProfile: Identifiable, Equatable {
         supportFunction: 0
     )
 
-    static let all: [DashProfile] = [zontesG, zontesF, zontesE]
+    static let all: [DashProfile] = [zontesG, zontesH, zontesF, zontesE]
 
     static func byID(_ id: String?) -> DashProfile {
         all.first { $0.id == id } ?? zontesG
