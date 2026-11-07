@@ -60,12 +60,15 @@ targets:
         OTHER_LDFLAGS:
           - $(inherited)
           - -lresolv
+          - -lcommonCrypto
     dependencies:
       - target: SmartAutoBroadcast
       - framework: Frameworks/Api.xcframework
         embed: false
       - sdk: ReplayKit.framework
       - sdk: CoreLocation.framework
+      - sdk: CryptoKit.framework
+      - sdk: Network.framework
       - sdk: Security.framework
 
   SmartAutoBroadcast:
