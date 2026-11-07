@@ -46,6 +46,8 @@ final class DashSession {
     private var stopping = false
     private var linkUp = false
     private var pushedFrames = 0
+    /// Log the first keyframe after each STREAM_START, so a field log shows what the dash got.
+    private var logNextKeyFrame = true
 
     init(profile: DashProfile, options: Options = .encoded, log: @escaping (String) -> Void) {
         self.profile = profile
@@ -97,7 +99,15 @@ final class DashSession {
             return
         }
         pushedFrames += 1
+        let headers = logNextKeyFrame ? H264NAL.headers(inAnnexB: accessUnit) : []
+        let logThis = logNextKeyFrame && headers.contains { $0 & 0x1F == 5 }
+        if logThis { logNextKeyFrame = false }
         lock.unlock()
+        if logThis {
+            let start = accessUnit.prefix(24).map { String(format: "%02x", $0) }.joined(separator: " ")
+            let types = headers.map { String(format: "%02x", $0) }.joined(separator: ",")
+            log("First keyframe: \(accessUnit.count) bytes, NAL headers [\(types)], starts \(start)")
+        }
         session.pushFrame(accessUnit)
     }
 
@@ -161,6 +171,9 @@ final class DashSession {
             config.phoneScreenWidth = options.captureWidth > 0 ? options.captureWidth : profile.fallbackWidth
             config.phoneScreenHeight = options.captureHeight > 0 ? options.captureHeight : profile.fallbackHeight
             config.phoneScreenRotation = 0
+            // Only "the mirror is live", never the notice when PXC comes up: the 368G reset the
+            // 10922 socket right after it (profile H), as upstream saw on another dash.
+            config.appStatusLiveOnly = true
         }
         return config
     }
@@ -276,12 +289,23 @@ final class DashSession {
             log("Dash video area \(width)x\(height) -> stream \(alignedWidth)x\(alignedHeight)")
             emit(.videoArea(width: alignedWidth, height: alignedHeight))
         case (3, 112):
+            lock.lock()
+            logNextKeyFrame = true
+            lock.unlock()
             log("Dash STREAM_START: sending an IDR.")
             emit(.streamStart)
             emit(.state(.streaming, "กำลังส่งภาพขึ้นจอ"))
-        case (4, 4):
+        case (4, 1):
+            // The frame format the dash negotiated: [supportExtendProtocol, plain framing applied].
+            let bytes = [UInt8](payload)
+            log("Video framing: extended=\(bytes.first.map(String.init) ?? "?") plain=\(bytes.dropFirst().first.map(String.init) ?? "?")")
+        case (4, 4) where payload.isEmpty:
             // Go's EventNeedIDR: passthrough queue is waiting for an IDR.
             emit(.needKeyFrame)
+        case (4, 4):
+            // Same number as TransportCmdAppStatusNotify: [mode, written].
+            let bytes = [UInt8](payload)
+            log("App status sent: mode=\(bytes.first.map(String.init) ?? "?") written=\(bytes.dropFirst().first.map(String.init) ?? "?")")
         case (2, _):
             let text = String(decoding: payload.prefix(400), as: UTF8.self)
             log("PXC 0x\(String(command, radix: 16, uppercase: true)): \(text)")

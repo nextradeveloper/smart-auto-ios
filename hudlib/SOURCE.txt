@@ -5,3 +5,5 @@ commit 524ccff1e0b268557642d89e688160b7c6cba749
   + iOS host support (PassthroughMode, CaptureWidth/Height, EventNeedIDR, staticSignal rename,
     SetMemoryLimit/FreeMemory).
 Removed from the snapshot: static/ (35 MB sample H.264, only read by cmd/hud-desktop) and docs/.
+Local change: hud/api BuildAnnexBAU / BuildAnnexBAUFromAVCC no longer prepend an AUD NAL
+  (the official ZONTES EasyConn SDK sends none; the 368G painted nothing with it).

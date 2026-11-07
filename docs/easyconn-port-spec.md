@@ -57,3 +57,23 @@ goroutine, unordered.
 - Go keeps a ring of 6 AUs, drops everything until an IDR at start, after STREAM_START and after
   3 s without input. ReplayKit only delivers changed frames, so re-encode the last one every 100 ms.
 - Encoder for E/F/G: 1280x528, 30 fps, 2.5 Mbps × quality, 1 s GOP of plain IDRs, Baseline 3.1.
+
+## What the official ZONTES app sends (2026-11-07)
+
+moto-hub never painted the 368G either (it pulled thousands of frames over the pairing QR), so
+the reference is the official app's EasyConn SDK, `build/zontes-jadx/sources/net/easyconn/carman/`:
+
+- Each pull is answered with `u32 LE length` + the raw MediaCodec output; an idle pull with four
+  zero bytes. SPS+PPS go in front of the first IDR in the same payload. No AUD, no SEI, no frame
+  index; the 8-byte timestamp is only for "movie mode" (`supportFunction & 1`).
+- The encoder is re-created at level 3.1 if the SPS level is above 31 (`HardCodecUtil`), and the
+  SPS is found by the literal header byte `0x67`. I-frame interval 3 s.
+
+Smart Auto therefore sends no AUD (hudlib `BuildAnnexBAU`), rewrites VideoToolbox's NAL headers
+(`0x27/0x28/0x25/0x21`) to MediaCodec's (`0x67/0x68/0x65/0x41`) and drops SEI/AUD
+(`Shared/H264NAL.swift`), and logs `Video framing: extended=… plain=…` and the first keyframe's
+bytes. Profile H sends only the "mirror is live" app status (`AppStatusLiveOnly`): the 368G reset
+the 10922 socket right after the "connected" one.
+
+The iCarCast relay (CarPlay direct) is High profile, level 4.2, 60 fps, which the official app
+would never send this dash; it would need re-encoding to Baseline 3.1 to match.

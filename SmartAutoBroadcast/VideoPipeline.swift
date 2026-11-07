@@ -354,8 +354,6 @@ final class VideoPipeline {
         }
     }
 
-    private static let startCode: [UInt8] = [0, 0, 0, 1]
-
     private func emit(_ sampleBuffer: CMSampleBuffer) {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
         var isKeyFrame = true
@@ -379,8 +377,7 @@ final class VideoPipeline {
                     parameterSetSizeOut: &size, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil
                 )
                 guard status == noErr, let pointer else { continue }
-                accessUnit.append(contentsOf: Self.startCode)
-                accessUnit.append(pointer, count: size)
+                H264NAL.appendAnnexB(Data(bytes: pointer, count: size), to: &accessUnit)
             }
         }
 
@@ -393,15 +390,15 @@ final class VideoPipeline {
         }
         guard copied == noErr else { return }
 
-        // AVCC (4-byte big-endian lengths) to Annex-B.
+        // AVCC (4-byte big-endian lengths) to Annex-B, with the headers the dash looks for and
+        // without SEI or AUD NALs, like the official app's MediaCodec output.
         var offset = 0
         while offset + 4 <= avcc.count {
             let nalLength = Int(avcc[offset]) << 24 | Int(avcc[offset + 1]) << 16
                 | Int(avcc[offset + 2]) << 8 | Int(avcc[offset + 3])
             offset += 4
             guard nalLength > 0, offset + nalLength <= avcc.count else { break }
-            accessUnit.append(contentsOf: Self.startCode)
-            accessUnit.append(avcc[offset..<(offset + nalLength)])
+            H264NAL.appendAnnexB(avcc.subdata(in: offset..<(offset + nalLength)), to: &accessUnit)
             offset += nalLength
         }
         guard !accessUnit.isEmpty else { return }

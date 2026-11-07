@@ -27,6 +27,22 @@ func TestBuildAnnexBAUFromAVCCRejectsTruncatedNAL(t *testing.T) {
 	}
 }
 
+// The 368G is fed frames exactly as the official app's MediaCodec writes them: no AUD.
+func TestBuildAnnexBAUAddsNoAUD(t *testing.T) {
+	annexB := []byte{0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x65, 0x88}
+	got, err := BuildAnnexBAU(annexB)
+	if err != nil || string(got) != string(annexB) {
+		t.Fatalf("BuildAnnexBAU(Annex-B) = %x, %v; want the input unchanged", got, err)
+	}
+
+	avcc := []byte{0, 0, 0, 2, 0x67, 0x42, 0, 0, 0, 2, 0x65, 0x88}
+	got, err = BuildAnnexBAU(avcc)
+	want := []byte{0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88}
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("BuildAnnexBAU(AVCC) = %x, %v; want %x", got, err, want)
+	}
+}
+
 func TestNewMobileSessionAllowsLiveOnlyMode(t *testing.T) {
 	config := NewMobileConfig(nil, 30, 10, 5, 10, 3)
 	session, err := NewMobileSession(config, nil)

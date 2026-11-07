@@ -32,9 +32,9 @@ func BuildAnnexBAUFromAVCC(avcc []byte) ([]byte, error) {
 
 	out := make([]byte, 0, len(avcc)+32)
 
-	// Prepend an AUD NAL. We use a common AUD RBSP payload 0xF0, which most decoders ignore.
-	// Annex-B start code (4 bytes) + NAL header (0x09) + rbsp_byte
-	out = append(out, 0x00, 0x00, 0x00, 0x01, 0x09, 0xF0)
+	// No AUD in front (smart-auto-ios): the official ZONTES app's EasyConn SDK sends each
+	// MediaCodec output as is, SPS/PPS first, and the Zontes 368G pulled AUD-led frames for
+	// minutes without painting one. The live queue finds IDRs by NAL type, not by AUD.
 
 	i := 0
 	nalCount := 0
@@ -68,11 +68,8 @@ func BuildAnnexBAU(sample []byte) ([]byte, error) {
 	// 1) Detect Annex-B: start code at beginning
 	if bytes.HasPrefix(sample, []byte{0x00, 0x00, 0x00, 0x01}) ||
 		bytes.HasPrefix(sample, []byte{0x00, 0x00, 0x01}) {
-		out := make([]byte, 0, len(sample)+16)
-		// prepend AUD
-		out = append(out, 0x00, 0x00, 0x00, 0x01, 0x09, 0xF0)
-		out = append(out, sample...)
-		return out, nil
+		// Passed on unchanged, without the AUD upstream prepends (see BuildAnnexBAUFromAVCC).
+		return append([]byte(nil), sample...), nil
 	}
 
 	// 2) Otherwise, assume AVCC (4-byte lengths)
