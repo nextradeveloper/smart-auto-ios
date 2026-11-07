@@ -169,10 +169,64 @@ private struct MainShellView: View {
                 .tabItem { Label("MY ACCOUNT", systemImage: "person.fill") }
                 .tag(3)
         }
-        .tint(.cyan)
-        .toolbarBackground(Color(red: 0.035, green: 0.038, blue: 0.042), for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
-        .toolbarColorScheme(.dark, for: .tabBar)
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CompactTabBar(selection: $selection)
+                .padding(.horizontal, 14)
+                .padding(.top, 4)
+                .padding(.bottom, 6)
+        }
+    }
+}
+
+private struct CompactTabBar: View {
+    @Binding var selection: Int
+
+    private let items: [(title: String, symbol: String)] = [
+        ("VEHICLE", "motorcycle"),
+        ("CARPLAY", "car.side.fill"),
+        ("SERVICE", "wrench.and.screwdriver.fill"),
+        ("ACCOUNT", "person.fill"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) { selection = index }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 18, weight: .semibold))
+                            .frame(height: 20)
+                        Text(item.title)
+                            .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                            .tracking(0.2)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(selection == index ? Color.cyan : Color.white.opacity(0.46))
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background {
+                        RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            .fill(selection == index ? Color.white.opacity(0.10) : Color.clear)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+                .accessibilityAddTraits(selection == index ? .isSelected : [])
+            }
+        }
+        .padding(5)
+        .frame(height: 58)
+        .background(.ultraThinMaterial, in: Capsule())
+        .environment(\.colorScheme, .dark)
+        .overlay {
+            Capsule()
+                .stroke(.white.opacity(0.13), lineWidth: 0.7)
+        }
+        .shadow(color: .black.opacity(0.38), radius: 18, y: 7)
     }
 }
 
@@ -347,22 +401,16 @@ private struct VehicleDashboardView: View {
                 pendingCommand = .find
             }
             .offset(y: -82)
-            .disabled(model.vehicle?.isOnline != true)
-            .opacity(model.vehicle?.isOnline == true ? 1 : 0.35)
 
             WheelButton(title: "Lock", systemImage: "lock.fill", accent: .cyan, isWorking: model.commandInProgress == .lock) {
                 pendingCommand = .lock
             }
             .offset(x: -82)
-            .disabled(model.vehicle?.isOnline != true)
-            .opacity(model.vehicle?.isOnline == true ? 1 : 0.35)
 
             WheelButton(title: "Unlock", systemImage: "lock.open.fill", isWorking: model.commandInProgress == .unlock) {
                 pendingCommand = .unlock
             }
             .offset(x: 82)
-            .disabled(model.vehicle?.isOnline != true)
-            .opacity(model.vehicle?.isOnline == true ? 1 : 0.35)
 
             WheelButton(title: "Refresh", systemImage: "arrow.clockwise") {
                 Task { await model.refresh() }
