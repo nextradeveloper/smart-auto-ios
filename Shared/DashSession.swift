@@ -14,11 +14,27 @@ final class DashSession {
         case state(BroadcastState, String)
         case videoArea(width: Int, height: Int)
         case streamStart
+        /// Passthrough only: the Go queue is waiting for an IDR the host must make its source send.
+        case needKeyFrame
+        /// The EasyConn session came up; the dash will ask for video next.
+        case linkUp
+    }
+
+    /// How the frames reach the dash.
+    struct Options {
+        /// Relay a stream this app did not encode (CarPlay from iCarCast): see Go's PassthroughMode.
+        var passthrough = false
+        /// Announced to the dash as the stream size; 0x0 echoes the size the dash asks for.
+        var captureWidth = 0
+        var captureHeight = 0
+
+        static let encoded = Options()
     }
 
     var onEvent: ((Event) -> Void)?
 
     private let profile: DashProfile
+    private let options: Options
     private let log: (String) -> Void
     private let workQueue = DispatchQueue(label: "smartauto.dash.work")
     private let lock = NSLock()
@@ -31,8 +47,9 @@ final class DashSession {
     private var linkUp = false
     private var pushedFrames = 0
 
-    init(profile: DashProfile, log: @escaping (String) -> Void) {
+    init(profile: DashProfile, options: Options = .encoded, log: @escaping (String) -> Void) {
         self.profile = profile
+        self.options = options
         self.log = log
     }
 
@@ -134,6 +151,9 @@ final class DashSession {
         config.timeZoneOffsetSeconds = TimeZone.current.secondsFromGMT()
         config.skipDashClockSync = false
         config.dashAsksForTime = false
+        config.passthroughMode = options.passthrough
+        config.captureWidth = options.captureWidth
+        config.captureHeight = options.captureHeight
         return config
     }
 
@@ -191,6 +211,7 @@ final class DashSession {
         }
         log("EasyConn session is up; waiting for the dash to request video.")
         emit(.state(.waitingForDash, "เชื่อมต่อจอแล้ว รอจอขอภาพ"))
+        emit(.linkUp)
 
         ended.wait()
         clear(generation: myGeneration)
@@ -237,6 +258,11 @@ final class DashSession {
             guard payload.count >= 4 else { return }
             let width = Int(payload[payload.startIndex]) | Int(payload[payload.startIndex + 1]) << 8
             let height = Int(payload[payload.startIndex + 2]) | Int(payload[payload.startIndex + 3]) << 8
+            if options.captureWidth > 0, options.captureHeight > 0 {
+                log("Dash video area \(width)x\(height); announced the relayed stream's " +
+                    "\(options.captureWidth)x\(options.captureHeight) instead.")
+                return
+            }
             let alignedWidth = max(16, width & ~15)
             let alignedHeight = max(16, height & ~15)
             log("Dash video area \(width)x\(height) -> stream \(alignedWidth)x\(alignedHeight)")
@@ -245,6 +271,9 @@ final class DashSession {
             log("Dash STREAM_START: sending an IDR.")
             emit(.streamStart)
             emit(.state(.streaming, "กำลังส่งภาพขึ้นจอ"))
+        case (4, 4):
+            // Go's EventNeedIDR: passthrough queue is waiting for an IDR.
+            emit(.needKeyFrame)
         case (2, _):
             let text = String(decoding: payload.prefix(400), as: UTF8.self)
             log("PXC 0x\(String(command, radix: 16, uppercase: true)): \(text)")

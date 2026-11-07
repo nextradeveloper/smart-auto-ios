@@ -93,6 +93,15 @@ enum SharedStore {
         set { defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: "dashAddressOverride") }
     }
 
+    /// iCarCast's Browser-screen HTTPS port (Settings › HTTPS port in iCarCast).
+    static var iCarCastPort: Int {
+        get {
+            let stored = defaults.integer(forKey: "iCarCastPort")
+            return stored > 0 ? stored : 8081
+        }
+        set { defaults.set(newValue, forKey: "iCarCastPort") }
+    }
+
     /// The wake-probe identity the dash acknowledged last time; tried first next time.
     static var acceptedProbeIdentity: String? {
         get { defaults.string(forKey: "acceptedProbeIdentity") }

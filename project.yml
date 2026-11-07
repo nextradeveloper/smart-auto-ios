@@ -40,6 +40,13 @@ targets:
         NSBonjourServices:
           - _EasyConn._tcp
         ITSAppUsesNonExemptEncryption: false
+        # CarPlay direct runs behind iCarCast; location updates keep it running there.
+        UIBackgroundModes:
+          - location
+        NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อทำงานต่อเบื้องหลังขณะส่ง CarPlay ขึ้นจอรถ
+        # iCarCast's local stream (127.0.0.1) presents a certificate for another name.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     entitlements:
       path: SmartAuto/SmartAuto.entitlements
       properties:
@@ -50,9 +57,16 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto
         PRODUCT_NAME: SmartAuto
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lresolv
     dependencies:
       - target: SmartAutoBroadcast
+      - framework: Frameworks/Api.xcframework
+        embed: false
       - sdk: ReplayKit.framework
+      - sdk: CoreLocation.framework
+      - sdk: Security.framework
 
   SmartAutoBroadcast:
     type: app-extension

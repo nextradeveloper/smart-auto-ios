@@ -154,7 +154,21 @@ type MobileConfig struct {
 	// supportFunctionEx and haveSysScreenInSetting) in CLIENT_INFO_RLY, as the
 	// EasyConn Java SDK does. Off keeps the proven reply unchanged.
 	ClientInfoSupportFunction bool
+	// PassthroughMode relays a stream this host did not encode (CarPlay from iCarCast): no
+	// frame is ever dropped or repeated, a dash poll takes every queued AU, and the host is
+	// asked for an IDR through OnEvent(source 4, command EventNeedIDR) whenever one is needed.
+	// See stream.LiveStreamSource.SetPassthrough.
+	PassthroughMode bool
+	// CaptureWidth and CaptureHeight, when both set, are announced to the dash as the stream
+	// size instead of echoing the size it asked for. Set them to the relayed stream's size.
+	CaptureWidth  int
+	CaptureHeight int
 }
+
+// EventNeedIDR is the transport event (source 4) a passthrough session raises when the host
+// must make its stream send an IDR: at the start, after the dash restarts the stream, and
+// after a queue overflow.
+const EventNeedIDR = 4
 
 func NewMobileConfig(staticSignal []byte, fps int, startupTimeoutSec, teardownTimeoutSec, discTimeout, discTries int) *MobileConfig {
 	return &MobileConfig{
@@ -217,7 +231,19 @@ func NewMobileSession(cfg *MobileConfig, cb MobileCallback) (*MobileSession, err
 	// 6 queued AUs ≈ 200ms at 30fps: absorbs producer/poll clock jitter without
 	// dropping frames of a predictive (GOP/intra-refresh) stream, while keeping
 	// worst-case buffered latency low. Overflow still drops the oldest AU.
-	live := stream.NewLiveStreamSource(cfg.TargetFPS, 3*time.Second, 6)
+	queue := 6
+	if cfg.PassthroughMode {
+		// About 1.5 s at CarPlay's 60 fps: a dash that stalls longer than that gets a fresh IDR.
+		queue = 90
+	}
+	live := stream.NewLiveStreamSource(cfg.TargetFPS, 3*time.Second, queue)
+	if cfg.PassthroughMode {
+		live.SetPassthrough(func() {
+			if ms.cb != nil {
+				ms.cb.OnEvent(time.Now().UnixMilli(), int(core.EventSourceTransport), EventNeedIDR, nil)
+			}
+		})
+	}
 	// Before anything is pushed: the constructor arms an IDR wait that no JPEG can ever
 	// satisfy, so leaving it armed would drop every still in silence.
 	live.SetOpaquePayloads(cfg.JpegStillsEnabled)
@@ -236,6 +262,7 @@ func NewMobileSession(cfg *MobileConfig, cb MobileCallback) (*MobileSession, err
 	ms.hud.SetClientVersion(cfg.ClientVersionCode, cfg.ClientVersionFingerprint)
 	ms.hud.SetPhoneOsVersion(cfg.PhoneOsVersion)
 	ms.hud.SetClientInfoSupportFunction(cfg.ClientInfoSupportFunction)
+	ms.hud.SetCaptureSize(cfg.CaptureWidth, cfg.CaptureHeight)
 	ms.hud.SetTimeZoneID(cfg.TimeZoneID)
 	// Only together with the id: an offset on its own would silently pin the
 	// clock replies to UTC for a host that never configured a zone, which is the

@@ -47,7 +47,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     self?.streamWidth = width
                     self?.streamHeight = height
                 }
-            case .streamStart:
+            case .streamStart, .linkUp, .needKeyFrame:
                 pipeline?.requestKeyFrame()
             }
         }

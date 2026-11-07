@@ -245,7 +245,17 @@ type LiveStreamSource struct {
 	// repeat on the way out. It exists for the dashboards that negotiate JPEG stills,
 	// where every payload is self-contained and the IDR rules would drop all of them.
 	opaque bool
+	// passthrough means the frames come from an encoder this process does not control
+	// (CarPlay relayed from iCarCast): every P-frame is a reference frame, so none may be
+	// dropped, the stream goes quiet whenever the picture is still, and a fresh IDR only
+	// comes when the host asks its source for one. See SetPassthrough.
+	passthrough    bool
+	onNeedIDR      func()
+	lastIDRRequest time.Time
 }
+
+// idrRequestInterval throttles how often a passthrough source asks the host for an IDR.
+const idrRequestInterval = time.Second
 
 func NewLiveStreamSource(targetFPS int, liveTimeout time.Duration, maxQ int) *LiveStreamSource {
 	if targetFPS <= 0 {
@@ -283,6 +293,35 @@ func (s *LiveStreamSource) SetOpaquePayloads(enabled bool) {
 	}
 }
 
+// SetPassthrough switches the source to relaying a stream it cannot re-encode:
+//   - no idle timeout: a still CarPlay screen sends nothing for seconds, and the dash keeps
+//     its last picture meanwhile; the old 3 s reset would only throw the next frames away;
+//   - a dash poll takes every queued AU at once (they are concatenated, each with its own
+//     AUD), since the source may run at 60 fps against a dash polling at 30 Hz and no frame
+//     can be skipped;
+//   - an overflowing queue is emptied and the source waits for an IDR instead of dropping
+//     the oldest reference frame, which would smear every picture up to the next IDR;
+//   - whenever it is waiting for an IDR it calls onNeedIDR (at most once a second), because
+//     only the host can make its source send one.
+func (s *LiveStreamSource) SetPassthrough(onNeedIDR func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.passthrough = true
+	s.onNeedIDR = onNeedIDR
+}
+
+// requestIDRLocked asks the host for an IDR, throttled. Callers hold s.mu.
+func (s *LiveStreamSource) requestIDRLocked(now time.Time) {
+	if !s.passthrough || s.onNeedIDR == nil {
+		return
+	}
+	if !s.lastIDRRequest.IsZero() && now.Sub(s.lastIDRRequest) < idrRequestInterval {
+		return
+	}
+	s.lastIDRRequest = now
+	go s.onNeedIDR()
+}
+
 // PushFrame is called by a live encoder, expected H.264 AU in Annex B aud + sps/pps + idr,
 // or a whole self-contained payload when SetOpaquePayloads is on.
 func (s *LiveStreamSource) PushFrame(au []byte) {
@@ -298,9 +337,20 @@ func (s *LiveStreamSource) PushFrame(au []byte) {
 	s.lastInput = now
 	if s.awaitIDR && !s.opaque {
 		if !hasAnnexBNALType(au, 5) {
+			s.requestIDRLocked(now)
 			return
 		}
 		s.awaitIDR = false
+	}
+
+	if s.count == s.capacity && s.passthrough {
+		// Dropping a reference frame would corrupt everything after it: start over at an IDR.
+		s.clearQueueLocked()
+		if !hasAnnexBNALType(au, 5) {
+			s.awaitIDR = true
+			s.requestIDRLocked(now)
+			return
+		}
 	}
 
 	if s.count == s.capacity {
@@ -331,6 +381,16 @@ func (s *LiveStreamSource) PrepareForConsumer() {
 	s.lastAU = nil
 	s.lastAdvance = time.Time{}
 	s.awaitIDR = !s.opaque
+	s.requestIDRLocked(time.Now())
+}
+
+func (s *LiveStreamSource) clearQueueLocked() {
+	for i := range s.aus {
+		s.aus[i] = nil
+	}
+	s.count = 0
+	s.head = 0
+	s.tail = 0
 }
 
 func (s *LiveStreamSource) IsActive(now time.Time) bool {
@@ -341,7 +401,7 @@ func (s *LiveStreamSource) IsActive(now time.Time) bool {
 		return false
 	}
 
-	if !s.lastInput.IsZero() && now.Sub(s.lastInput) > s.liveTimeout {
+	if !s.passthrough && !s.lastInput.IsZero() && now.Sub(s.lastInput) > s.liveTimeout {
 		s.resetLocked()
 		return false
 	}
@@ -397,9 +457,27 @@ func (s *LiveStreamSource) NextFrame(now time.Time) ([]byte, error) {
 	if !s.active {
 		return nil, nil
 	}
-	if !s.lastInput.IsZero() && now.Sub(s.lastInput) > s.liveTimeout {
+	if !s.passthrough && !s.lastInput.IsZero() && now.Sub(s.lastInput) > s.liveTimeout {
 		s.resetLocked()
 		return nil, nil
+	}
+
+	// Passthrough: hand over everything queued in one payload, oldest first.
+	if s.passthrough && s.count > 1 {
+		total := 0
+		for i := 0; i < s.count; i++ {
+			total += len(s.aus[(s.head+i)%s.capacity])
+		}
+		joined := make([]byte, 0, total)
+		for s.count > 0 {
+			joined = append(joined, s.aus[s.head]...)
+			s.aus[s.head] = nil
+			s.head = (s.head + 1) % s.capacity
+			s.count--
+		}
+		s.lastAU = joined
+		s.lastAdvance = now
+		return joined, nil
 	}
 
 	// Pop the next live AU
@@ -412,6 +490,12 @@ func (s *LiveStreamSource) NextFrame(now time.Time) ([]byte, error) {
 		s.lastAU = au
 		s.lastAdvance = now
 		return au, nil
+	}
+
+	// Passthrough never repeats: the dash holds its last picture through a still screen, and
+	// re-sending a joined IDR+P batch every poll would only burn the link.
+	if s.passthrough {
+		return nil, nil
 	}
 
 	// No queued frames? Repeating is only decode-safe for an IDR - or for an opaque

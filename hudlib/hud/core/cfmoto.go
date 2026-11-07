@@ -89,6 +89,8 @@ type CfmotoHUD struct {
 	plainVideoFraming      bool
 	pageSwitchProbe        bool
 	jpegStills             bool
+	captureWidth           int
+	captureHeight          int
 	timeZoneID             string
 	timeZoneOffsetSec      int
 	timeZoneOffsetSet      bool
@@ -233,6 +235,16 @@ func (hud *CfmotoHUD) SetJpegStills(enabled bool) {
 	hud.mu.Lock()
 	defer hud.mu.Unlock()
 	hud.jpegStills = enabled
+}
+
+// SetCaptureSize fixes the geometry announced in the capture reply instead of echoing the
+// dash's request (0x0 keeps the echo). For a host passing through a stream it did not encode.
+// Configure it before StartStream.
+func (hud *CfmotoHUD) SetCaptureSize(width, height int) {
+	hud.mu.Lock()
+	defer hud.mu.Unlock()
+	hud.captureWidth = width
+	hud.captureHeight = height
 }
 
 // SetTimeZoneID supplies the host's IANA zone id for the PXC QUERY_TIME reply.
@@ -508,6 +520,8 @@ func (hud *CfmotoHUD) startStream(ctx context.Context, initConn stdnet.Conn) (er
 	mediaControl := net.NewMediaControl(":10921")
 	mediaControl.SupportFunction = hud.supportFunction
 	mediaControl.JpegStills = hud.jpegStills
+	mediaControl.CaptureWidth = hud.captureWidth
+	mediaControl.CaptureHeight = hud.captureHeight
 	// STREAM_START is the latest moment that still precedes a single painted pixel: the
 	// dash has negotiated the capture and said it wants the stream. If a page command is
 	// what unblocks its UI, this is where it belongs.

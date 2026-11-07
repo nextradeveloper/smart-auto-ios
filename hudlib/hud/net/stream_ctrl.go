@@ -75,6 +75,11 @@ type MediaControl struct {
 	// EasyConn app writes the encoder it will actually use, and one dash family asks for
 	// H.264, drains the stream and paints nothing. See buildMediaCaptureAckPayload.
 	JpegStills bool
+	// CaptureWidth and CaptureHeight, when both set, replace the geometry announced in the
+	// capture reply. A host relaying a stream it did not encode (CarPlay passed through from
+	// iCarCast) must tell the dash the size that stream really has, not echo the dash's own.
+	CaptureWidth  int
+	CaptureHeight int
 	// OnCaptureNegotiated reports the supportExtendProtocol byte the dash asked for
 	// and we echoed back, once the capture-config reply is on the wire.
 	OnCaptureNegotiated func(extended bool)
@@ -204,7 +209,7 @@ func (s *MediaControl) handleEvent(event *MediaCtrlResponse, conn net.Conn) {
 	switch event.Command {
 	case MediaCtrlInit:
 		s.emitEvent(*event)
-		payload := buildMediaCaptureAckPayload(event.Payload, s.JpegStills)
+		payload := buildMediaCaptureAckPayloadSized(event.Payload, s.JpegStills, s.CaptureWidth, s.CaptureHeight)
 		response := &MediaCtrlResponse{Command: MediaCtrlAck, Size: uint16(len(payload)), Payload: payload}
 		if err := s.writeResponse(response, conn); err != nil {
 			s.emitError(s.connectionError(conn, CtrlWriteErr, err))
@@ -306,6 +311,18 @@ func buildMediaCaptureAckPayload(request []byte, forceJpeg bool) []byte {
 		height,
 		extendedProtocol,
 	)
+	return payload
+}
+
+// buildMediaCaptureAckPayloadSized is buildMediaCaptureAckPayload with the announced
+// geometry replaced when width and height are both set. See MediaControl.CaptureWidth.
+func buildMediaCaptureAckPayloadSized(request []byte, forceJpeg bool, width, height int) []byte {
+	payload := buildMediaCaptureAckPayload(request, forceJpeg)
+	if width > 0 && height > 0 && width <= 0xFFFF && height <= 0xFFFF {
+		binary.LittleEndian.PutUint16(payload[4:6], uint16(width))
+		binary.LittleEndian.PutUint16(payload[6:8], uint16(height))
+		logging.Printf("Media capture size overridden to %dx%d", width, height)
+	}
 	return payload
 }
 
