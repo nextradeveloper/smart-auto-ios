@@ -436,7 +436,7 @@ private struct CarPlayView: View {
                     .padding(.vertical, 8)
                 }
 
-                Section("CarPlay โดยตรง") {
+                Section {
                     Button {
                         direct.isRunning ? direct.stop() : direct.start()
                     } label: {
@@ -447,6 +447,8 @@ private struct CarPlayView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("CarPlay โดยตรง")
                 } footer: {
                     Text("เปิด iCarCast โหมด This iPhone ค้างไว้ แล้วกลับมากดเริ่มส่ง CarPlay")
                 }
