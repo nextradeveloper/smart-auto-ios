@@ -60,7 +60,6 @@ targets:
         OTHER_LDFLAGS:
           - $(inherited)
           - -lresolv
-          - -lcommonCrypto
     dependencies:
       - target: SmartAutoBroadcast
       - framework: Frameworks/Api.xcframework
