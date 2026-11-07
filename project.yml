@@ -33,6 +33,7 @@ targets:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSLocalNetworkUsageDescription: Smart Auto ต้องคุยกับจอรถผ่าน Wi-Fi ของรถเพื่อส่งภาพขึ้นจอ

@@ -12,6 +12,12 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 45
+    env:
+      # TestFlight upload runs only once these repository secrets exist.
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,10 +72,53 @@ jobs:
             build 2>&1 | tee build/xcodebuild.log | grep -E 'error:|warning: .*(SmartAuto|Shared)|BUILD (SUCCEEDED|FAILED)' || true
           grep -q 'BUILD SUCCEEDED' build/xcodebuild.log
 
-      - name: Upload build log
+      - name: Archive and upload to TestFlight
+        if: env.ASC_KEY_ID != '' && env.APPLE_TEAM_ID != '' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
+          AUTH=(-allowProvisioningUpdates
+                -authenticationKeyPath "$KEY_PATH"
+                -authenticationKeyID "$ASC_KEY_ID"
+                -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          xcodebuild \
+            -project SmartAuto.xcodeproj \
+            -scheme SmartAuto \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/SmartAuto.xcarchive \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            "${AUTH[@]}" \
+            archive 2>&1 | tee build/archive.log | grep -E 'error:|ARCHIVE (SUCCEEDED|FAILED)' || true
+          grep -q 'ARCHIVE SUCCEEDED' build/archive.log
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/SmartAuto.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export \
+            "${AUTH[@]}" 2>&1 | tee build/export.log | grep -E 'error:|EXPORT (SUCCEEDED|FAILED)|Upload' || true
+          grep -q 'EXPORT SUCCEEDED' build/export.log
+          rm -f "$KEY_PATH"
+
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcodebuild-log
-          path: build/xcodebuild.log
+          name: xcodebuild-logs
+          path: build/*.log
           if-no-files-found: ignore
