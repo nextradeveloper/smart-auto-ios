@@ -112,3 +112,15 @@ targets:
       - sdk: VideoToolbox.framework
       - sdk: CoreMedia.framework
       - sdk: Security.framework
+
+  SmartAutoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SmartAutoTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: SmartAuto

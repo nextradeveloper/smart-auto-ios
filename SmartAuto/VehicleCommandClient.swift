@@ -27,13 +27,12 @@ final class VehicleCommandClient {
         session: ZontesSession,
         vehicle: VehicleSnapshot
     ) async throws {
-        let carCode = vehicle.carCode.isEmpty ? session.carCode : vehicle.carCode
+        let pkeCode = vehicle.carCode.isEmpty ? session.carCode : vehicle.carCode
         let mcuID = vehicle.mcuID.isEmpty ? session.mcuID : vehicle.mcuID
-        guard !session.userCode.isEmpty, !carCode.isEmpty else {
+        guard !session.userCode.isEmpty, !pkeCode.isEmpty else {
             throw ZontesError.missingVehicle
         }
 
-        let proof = try CommandProof.make(mcuID: mcuID)
         let prefix: String
         let responseCode: String
         switch command {
@@ -47,14 +46,20 @@ final class VehicleCommandClient {
             prefix = "*UF"
             responseCode = "3"
         }
-        let payload = "\(prefix),\(session.userCode),\(carCode),\(proof)"
+
         let deviceID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
-        let handshake = "*UL,\(session.userCode),\(deviceID),0.0,0.0#"
+        let packets = try LegacyRemoteProtocol.makePackets(
+            commandPrefix: prefix,
+            userCode: session.userCode,
+            deviceID: deviceID,
+            mcuID: mcuID,
+            pkeCode: pkeCode
+        )
 
         try await withCheckedThrowingContinuation { continuation in
             let operation = PendingVehicleCommand(
-                handshake: handshake,
-                payload: payload,
+                authentication: packets.authentication,
+                command: packets.command,
                 responseCode: responseCode,
                 continuation: continuation
             )
@@ -63,164 +68,56 @@ final class VehicleCommandClient {
     }
 }
 
-private final class PendingVehicleCommand {
-    private let queue = DispatchQueue(label: "smartauto.zontes.command")
-    private let connection = NWConnection(
-        host: NWEndpoint.Host("www.sharpon.com"),
-        port: NWEndpoint.Port(rawValue: 4510)!,
-        using: .tcp
-    )
-    private let handshake: Data
-    private let payload: Data
-    private let responseCode: String
-    private let continuation: CheckedContinuation<Void, Error>
-    private let lock = NSLock()
-    private var finished = false
-    private var responseBuffer = ""
-
-    init(
-        handshake: String,
-        payload: String,
-        responseCode: String,
-        continuation: CheckedContinuation<Void, Error>
-    ) {
-        self.handshake = Data(handshake.utf8)
-        self.payload = Data(payload.utf8)
-        self.responseCode = responseCode
-        self.continuation = continuation
-    }
-
-    func start() {
-        connection.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.receiveResponses()
-                self.sendHandshake()
-            case let .failed(error):
-                self.finish(.failure(error))
-            case .cancelled:
-                break
-            default:
-                break
-            }
-        }
-        connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 12) { [weak self] in
-            self?.finish(.failure(ZontesError.commandTimedOut))
-        }
-    }
-
-    private func sendHandshake() {
-        connection.send(content: handshake, completion: .contentProcessed { [weak self] error in
-            guard let self else { return }
-            if let error {
-                self.finish(.failure(error))
-                return
-            }
-            self.queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                self?.sendCommand()
-            }
-        })
-    }
-
-    private func sendCommand() {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
-            guard let self else { return }
-            if let error {
-                self.finish(.failure(error))
-            }
-        })
-    }
-
-    private func receiveResponses() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            if let error {
-                self.finish(.failure(error))
-                return
-            }
-            if let data, !data.isEmpty {
-                self.responseBuffer += String(decoding: data, as: UTF8.self)
-                self.consumeCompleteFrames()
-            }
-            if !isComplete, !self.finished {
-                self.receiveResponses()
-            } else if isComplete, !self.finished {
-                self.finish(.failure(ZontesError.commandConnectionClosed))
-            }
-        }
-    }
-
-    private func consumeCompleteFrames() {
-        while let terminator = responseBuffer.firstIndex(of: "#") {
-            let frame = String(responseBuffer[...terminator])
-            responseBuffer.removeSubrange(...terminator)
-            let fields = frame
-                .dropLast()
-                .split(separator: ",", omittingEmptySubsequences: false)
-                .map(String.init)
-            guard fields.count >= 3,
-                  fields[0] == "*AO",
-                  fields[1] == responseCode
-            else { continue }
-
-            if fields[2] == "1" {
-                finish(.success(()))
-            } else {
-                finish(.failure(ZontesError.commandRejected))
-            }
-            return
-        }
-    }
-
-    private func finish(_ result: Result<Void, Error>) {
-        lock.lock()
-        guard !finished else {
-            lock.unlock()
-            return
-        }
-        finished = true
-        lock.unlock()
-
-        connection.stateUpdateHandler = nil
-        connection.cancel()
-        continuation.resume(with: result)
-    }
+struct LegacyRemotePackets {
+    let authentication: Data
+    let command: Data
 }
 
-private enum CommandProof {
+enum LegacyRemoteProtocol {
     private static let applicationKey = Data("TAYOBTa1YCWc2gTS".utf8)
 
-    static func make(mcuID: String) throws -> String {
-        let cleanMCU = mcuID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let mcuBytes = Data(hex: cleanMCU), mcuBytes.count == 16 else {
+    static func makePackets(
+        commandPrefix: String,
+        userCode: String,
+        deviceID: String,
+        mcuID: String,
+        pkeCode: String,
+        nonce: String? = nil,
+        timestamp: String? = nil
+    ) throws -> LegacyRemotePackets {
+        guard [userCode, deviceID, pkeCode].allSatisfy(isValidField) else {
             throw ZontesError.invalidVehicleKey
         }
+        let proof = try makeProof(
+            mcuID: mcuID,
+            nonce: nonce ?? randomNonce(),
+            timestamp: timestamp ?? currentTimestamp()
+        )
+        return LegacyRemotePackets(
+            authentication: Data("*UL,\(userCode),\(deviceID),0.0,0.0#".utf8),
+            command: Data("\(commandPrefix),\(userCode),\(pkeCode),\(proof)".utf8)
+        )
+    }
 
-        let nonceText = (0 ..< 8).map { _ in String(Int.random(in: 0 ... 9)) }.joined()
-        guard let nonce = Data(hex: nonceText), nonce.count == 4 else {
-            throw ZontesError.invalidVehicleKey
-        }
+    private static func makeProof(mcuID: String, nonce: String, timestamp: String) throws -> String {
+        guard let mcuBytes = Data(hex: mcuID), mcuBytes.count == 16,
+              let nonceBytes = Data(hex: nonce), nonceBytes.count == 4,
+              nonce.utf8.count == 8,
+              nonce.utf8.allSatisfy({ (48 ... 57).contains($0) }),
+              timestamp.utf8.count == 14,
+              timestamp.utf8.allSatisfy({ (48 ... 57).contains($0) })
+        else { throw ZontesError.invalidVehicleKey }
+
         let encryptedMCU = try aesECBEncrypt(mcuBytes, key: applicationKey)
-        guard encryptedMCU.count == 16 else { throw ZontesError.invalidVehicleKey }
-
-        var derivedKey = Data(encryptedMCU.prefix(12))
+        var derivedKey = [UInt8](encryptedMCU)
         for index in 0 ..< 4 {
-            derivedKey.append(encryptedMCU[12 + index] ^ nonce[index])
+            derivedKey[12 + index] ^= nonceBytes[index]
         }
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60)
-        formatter.dateFormat = "yyyyMMddHHmmss"
-
-        var timestamp = Data(repeating: 0, count: 16)
-        let timeBytes = Data(formatter.string(from: Date()).utf8)
-        timestamp.replaceSubrange(0 ..< min(14, timeBytes.count), with: timeBytes.prefix(14))
-        let encryptedTime = try aesECBEncrypt(timestamp, key: derivedKey)
-        return nonceText + "," + encryptedTime.hexString
+        var timeBlock = Data(timestamp.utf8)
+        timeBlock.append(contentsOf: [0, 0])
+        let encryptedTime = try aesECBEncrypt(timeBlock, key: Data(derivedKey))
+        return nonce + "," + encryptedTime.hexString
     }
 
     private static func aesECBEncrypt(_ input: Data, key: Data) throws -> Data {
@@ -250,10 +147,152 @@ private enum CommandProof {
             }
         }
         guard status == 0 else { throw ZontesError.invalidVehicleKey }
-        if moved < output.count {
-            output.removeSubrange(moved ..< output.count)
-        }
+        output.removeSubrange(moved ..< output.count)
         return output
+    }
+
+    private static func randomNonce() -> String {
+        (0 ..< 8).map { _ in String(Int.random(in: 0 ... 9)) }.joined()
+    }
+
+    private static func currentTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60)
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        return formatter.string(from: Date())
+    }
+
+    private static func isValidField(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 64 && value.utf8.allSatisfy {
+            (0x21 ... 0x7e).contains($0) && $0 != 0x2c && $0 != 0x23
+        }
+    }
+}
+
+private final class PendingVehicleCommand {
+    private let queue = DispatchQueue(label: "smartauto.zontes.command")
+    private let connection = NWConnection(
+        host: NWEndpoint.Host("www.sharpon.com"),
+        port: NWEndpoint.Port(rawValue: 4510)!,
+        using: .tcp
+    )
+    private let authentication: Data
+    private let command: Data
+    private let responseCode: String
+    private let continuation: CheckedContinuation<Void, Error>
+    private let finishLock = NSLock()
+    private var finished = false
+    private var commandSubmitted = false
+    private var responseBuffer = ""
+
+    init(
+        authentication: Data,
+        command: Data,
+        responseCode: String,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        self.authentication = authentication
+        self.command = command
+        self.responseCode = responseCode
+        self.continuation = continuation
+    }
+
+    func start() {
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.receiveResponses()
+                self.sendAuthenticationThenCommand()
+            case let .failed(error):
+                self.finish(.failure(error))
+            case .cancelled:
+                break
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 12) { [weak self] in
+            self?.finish(.failure(ZontesError.commandTimedOut))
+        }
+    }
+
+    private func sendAuthenticationThenCommand() {
+        connection.send(content: authentication, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+
+            // The official 1.12 client writes the command immediately after the
+            // login frame. Waiting for a newer *BR frame makes this protocol stall.
+            self.commandSubmitted = true
+            self.connection.send(content: self.command, completion: .contentProcessed { [weak self] error in
+                if let error { self?.finish(.failure(error)) }
+            })
+        })
+    }
+
+    private func receiveResponses() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+            if let data, !data.isEmpty {
+                self.responseBuffer += String(decoding: data, as: UTF8.self)
+                self.consumeCompleteFrames()
+            }
+            if !isComplete, !self.finished {
+                self.receiveResponses()
+            } else if isComplete, !self.finished {
+                self.finish(.failure(ZontesError.commandConnectionClosed))
+            }
+        }
+    }
+
+    private func consumeCompleteFrames() {
+        if responseBuffer.count > 65_536 {
+            finish(.failure(ZontesError.invalidResponse))
+            return
+        }
+
+        while let terminator = responseBuffer.firstIndex(of: "#") {
+            let raw = String(responseBuffer[...terminator])
+            responseBuffer.removeSubrange(...terminator)
+            guard let start = raw.lastIndex(of: "*") else { continue }
+            let fields = raw[start...]
+                .dropLast()
+                .split(separator: ",", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard commandSubmitted,
+                  fields.count == 3,
+                  fields[0] == "*AO",
+                  fields[1] == responseCode
+            else { continue }
+
+            finish(fields[2] == "1" ? .success(()) : .failure(ZontesError.commandRejected))
+            return
+        }
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        finishLock.lock()
+        guard !finished else {
+            finishLock.unlock()
+            return
+        }
+        finished = true
+        finishLock.unlock()
+
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        continuation.resume(with: result)
     }
 }
 
