@@ -4,6 +4,30 @@ import Foundation
 
 // ZONTES Smart 1.12 BLE authentication, using the factory Bluetooth password.
 enum LegacyBluetoothProtocol {
+    enum Response: Equatable {
+        case challenge(String)
+        case acknowledged
+        case rejected
+        case ignored
+    }
+
+    static func response(fields: [String], pke: String, action: String, awaitingChallenge: Bool) -> Response {
+        guard fields.count >= 5, fields[1] == pke, fields[2] == "10" else { return .ignored }
+        if awaitingChallenge, ["*AT", "*BT"].contains(fields[0]), fields[3] == "008" {
+            let value = fields[4]
+            guard value.utf8.count == 8, value.utf8.allSatisfy({
+                (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+            }) else { return .ignored }
+            return .challenge(value)
+        }
+        guard !awaitingChallenge, fields[0] == "*AT", fields[3] == "001", fields[4] == action else { return .ignored }
+        if fields.count == 5 { return .acknowledged }
+        guard fields.count == 6 else { return .ignored }
+        if fields[5] == "1" { return .acknowledged }
+        if fields[5] == "0" { return .rejected }
+        return .ignored
+    }
+
     static func packet(action: String, pke: String, mcu: String, challenge: String, password: String) throws -> Data {
         func hex(_ string: String, count: Int) throws -> [UInt8] {
             guard string.utf8.count == count * 2 else { throw ZontesError.invalidVehicleKey }
@@ -71,6 +95,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     private var writePending = false
     private var generation = 0
     private var operationID = 0
+    private var notificationCount = 0
+    private var ignoredFrameCount = 0
 
     override init() {
         super.init()
@@ -118,6 +144,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         guard pke.count >= 6 else { throw ZontesError.invalidVehicleKey }
         commandInProgress = command
         phase = 1
+        notificationCount = 0
+        ignoredFrameCount = 0
         operationID += 1
         let operation = operationID
         try await withCheckedThrowingContinuation { (pending: CheckedContinuation<Void, Error>) in
@@ -126,7 +154,14 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
             let current = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                 guard let self, self.generation == current, self.operationID == operation, self.continuation != nil else { return }
-                let text = self.phase == 2 ? "ยังไม่ได้รับการยืนยันจากรถ ตรวจสอบรถก่อนลองอีกครั้ง" : "รถไม่ตอบกลับ Bluetooth กรุณาลองเชื่อมต่อใหม่"
+                let text: String
+                if self.phase == 2 {
+                    text = "ส่งคำสั่งแล้ว แต่ยังไม่ได้รับการยืนยัน กรุณาตรวจสอบรถก่อนลองอีกครั้ง"
+                } else if self.notificationCount == 0 {
+                    text = "เชื่อมต่อ Bluetooth แล้ว แต่ไม่มีข้อมูลตอบกลับจากรถ กรุณาปิดแอป Zontes Smart แล้วเชื่อมต่อใหม่"
+                } else {
+                    text = "ได้รับข้อมูล Bluetooth แต่ยังยืนยันตัวรถไม่ได้ (ข้อมูลที่ไม่ตรง \(self.ignoredFrameCount) รายการ) กรุณาติดต่อผู้พัฒนา"
+                }
                 self.finish(ZontesError.message(text))
             }
         }
@@ -175,22 +210,24 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     }
 
     private func receive(_ data: Data) {
+        if continuation != nil { notificationCount += 1 }
         frameBuffer += String(decoding: data, as: UTF8.self)
         if frameBuffer.count > 4096 { frameBuffer = ""; finish(ZontesError.invalidResponse); return }
         while let end = frameBuffer.firstIndex(of: "#") {
             let raw = String(frameBuffer[...end]); frameBuffer.removeSubrange(...end)
             guard let start = raw.lastIndex(of: "*") else { continue }
             let fields = raw[start...].dropLast().split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-            guard fields.count >= 5, fields[1] == pke, fields[2] == "10" else { continue }
-            if phase == 1, ["*AT", "*BT"].contains(fields[0]), fields.count == 5, fields[3] == "008" {
+            guard phase == 1 || phase == 2 else { continue }
+            switch LegacyBluetoothProtocol.response(fields: fields, pke: pke, action: action, awaitingChallenge: phase == 1) {
+            case let .challenge(value):
                 do {
-                    let packet = try LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: fields[4], password: String(pke.suffix(6)))
+                    let packet = try LegacyBluetoothProtocol.packet(action: action, pke: pke, mcu: mcu, challenge: value, password: String(pke.suffix(6)))
                     phase = 2
                     enqueue(packet)
                 } catch { finish(error) }
-            } else if phase == 2, fields[0] == "*AT", fields[3] == "001", fields[4] == action {
-                if fields.count == 5 { finish() }
-                else if fields.count == 6 && fields[5] == "0" { finish(ZontesError.commandRejected) }
+            case .acknowledged: finish()
+            case .rejected: finish(ZontesError.commandRejected)
+            case .ignored: ignoredFrameCount += 1
             }
         }
     }

@@ -2,6 +2,21 @@ import XCTest
 @testable import SmartAuto
 
 final class VehicleCommandProtocolTests: XCTestCase {
+    func testLegacyBluetoothResponsesWithVoltageAndStatus() {
+        let pke = "123456789000123"
+        func parse(_ frame: String, action: String = "1", challenge: Bool = true) -> LegacyBluetoothProtocol.Response {
+            let fields = frame.dropLast().split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            return LegacyBluetoothProtocol.response(fields: fields, pke: pke, action: action, awaitingChallenge: challenge)
+        }
+        XCTAssertEqual(parse("*AT,\(pke),10,008,89ABCDEF,126#"), .challenge("89ABCDEF"))
+        XCTAssertEqual(parse("*AT,\(pke),10,008,89ABCDEF#"), .challenge("89ABCDEF"))
+        XCTAssertEqual(parse("*AT,OTHER,10,008,89ABCDEF,126#"), .ignored)
+        XCTAssertEqual(parse("*AT,\(pke),10,008,XYZ,126#"), .ignored)
+        XCTAssertEqual(parse("*AT,\(pke),10,001,1,1#", challenge: false), .acknowledged)
+        XCTAssertEqual(parse("*AT,\(pke),10,001,1,0#", challenge: false), .rejected)
+        XCTAssertEqual(parse("*AT,\(pke),10,001,2,1#", challenge: false), .ignored)
+    }
+
     func testLegacyBluetoothFactoryPasswordPacket() throws {
         for action in ["1", "2", "5", "6"] {
             let packet = try LegacyBluetoothProtocol.packet(
