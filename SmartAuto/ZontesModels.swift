@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct ZontesSession: Codable, Equatable {
     let account: String
@@ -78,10 +79,13 @@ enum VehicleCommand: String, Identifiable, CaseIterable {
         case .lock: return "lock.fill"
         case .unlock: return "lock.open.fill"
         case .find: return "location.fill"
-        case .seat: return "rectangle.open.vertical"
+        case .seat: return Self.seatSymbol
         case .fuelLid: return "fuelpump.fill"
         }
     }
+
+    /// SF Symbols has no motorcycle seat; the car seat reads closest.
+    private static let seatSymbol = UIImage(systemName: "carseat.right.fill") != nil ? "carseat.right.fill" : "chair.fill"
 }
 
 enum ZontesError: LocalizedError {

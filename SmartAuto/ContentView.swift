@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 private let groupDefaults = UserDefaults(suiteName: AppConstants.appGroup)
 
@@ -154,22 +155,50 @@ private struct MainShellView: View {
     var body: some View {
         TabView(selection: $selection) {
             VehicleDashboardView()
-                .tabItem { Label("VEHICLE", systemImage: "motorcycle") }
+                .tabItem { TabIcon.vehicle; Text("Vehicle") }
                 .tag(0)
 
             CarPlayView()
-                .tabItem { Label("CARPLAY", systemImage: "car.side.fill") }
+                .tabItem { TabIcon.carPlay; Text("CarPlay") }
                 .tag(1)
 
             ServiceView()
-                .tabItem { Label("SERVICE", systemImage: "wrench.and.screwdriver.fill") }
+                .tabItem { TabIcon.service; Text("Service") }
                 .tag(2)
 
             AccountView()
-                .tabItem { Label("MY ACCOUNT", systemImage: "person.fill") }
+                .tabItem { TabIcon.account; Text("Account") }
                 .tag(3)
         }
         .tint(.cyan)
+    }
+}
+
+/// Tab icons drawn into one small box, so wide symbols such as the motorcycle and the wrench
+/// do not look bigger than the others.
+private enum TabIcon {
+    static let vehicle = make("motorcycle")
+    static let carPlay = make("car.side.fill")
+    static let service = make("wrench.and.screwdriver.fill")
+    static let account = make("person.fill")
+
+    private static func make(_ name: String) -> Image {
+        let box = CGSize(width: 24, height: 18)
+        let configuration = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        guard let symbol = UIImage(systemName: name, withConfiguration: configuration),
+              symbol.size.width > 0, symbol.size.height > 0
+        else { return Image(systemName: name) }
+        let scale = min(box.width / symbol.size.width, box.height / symbol.size.height, 1)
+        let size = CGSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
+        let image = UIGraphicsImageRenderer(size: box).image { _ in
+            symbol.withTintColor(.black).draw(in: CGRect(
+                x: (box.width - size.width) / 2,
+                y: (box.height - size.height) / 2,
+                width: size.width,
+                height: size.height
+            ))
+        }
+        return Image(uiImage: image.withRenderingMode(.alwaysTemplate))
     }
 }
 
@@ -678,11 +707,10 @@ private struct WheelButton: View {
                         .foregroundStyle(isActive ? Color.cyan : Color.white)
                 }
                 Text(title)
-                    .font(.system(size: 9, weight: isActive ? .bold : .medium))
-                    .foregroundStyle(isActive ? Color.cyan : Color.white.opacity(0.9))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
             }
             .frame(width: 64, height: 52)
-            .background(isActive ? Color.cyan.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 14))
             .contentShape(Rectangle())
             .opacity(isEnabled || isWorking ? 1 : 0.4)
         }
