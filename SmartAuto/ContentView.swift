@@ -151,15 +151,18 @@ private struct DarkField<Field: View>: View {
 
 private struct MainShellView: View {
     @State private var selection = 0
+    /// Owned here so the dash screen can show the bike's battery and lock from any tab.
+    @StateObject private var bluetooth = VehicleBluetoothMonitor()
+    @StateObject private var dashScreen = DashScreenService()
 
     var body: some View {
         TabView(selection: $selection) {
-            VehicleDashboardView()
+            VehicleDashboardView(bluetooth: bluetooth)
                 .tabItem { TabIcon.vehicle; Text("Vehicle") }
                 .tag(0)
 
-            CarPlayView()
-                .tabItem { TabIcon.carPlay; Text("CarPlay") }
+            DashTabView(dashScreen: dashScreen)
+                .tabItem { TabIcon.dash; Text("จอรถ") }
                 .tag(1)
 
             ServiceView()
@@ -171,6 +174,16 @@ private struct MainShellView: View {
                 .tag(3)
         }
         .tint(.cyan)
+        .onAppear {
+            let monitor = bluetooth
+            dashScreen.vehicleSource = {
+                DashScene.Vehicle(
+                    connected: monitor.status.isPositive,
+                    locked: monitor.isLocked,
+                    voltage: monitor.batteryVoltage
+                )
+            }
+        }
     }
 }
 
@@ -178,7 +191,7 @@ private struct MainShellView: View {
 /// do not look bigger than the others.
 private enum TabIcon {
     static let vehicle = make("motorcycle")
-    static let carPlay = make("car.side.fill")
+    static let dash = make("speedometer")
     static let service = make("wrench.and.screwdriver.fill")
     static let account = make("person.fill")
 
@@ -204,12 +217,16 @@ private enum TabIcon {
 
 private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
-    @StateObject private var bluetooth = VehicleBluetoothMonitor()
+    @ObservedObject var bluetooth: VehicleBluetoothMonitor
     @StateObject private var parking = ParkingSpotTracker()
     @State private var showsStylePicker = false
     @State private var showsFinder = false
     /// Seat or fuel lid that just opened; lit for a few seconds, as in the official app.
     @State private var justOpened: VehicleCommand?
+
+    init(bluetooth: VehicleBluetoothMonitor) {
+        self.bluetooth = bluetooth
+    }
 
     private var isLocked: Bool? { bluetooth.isLocked ?? model.vehicle?.isLocked }
     private var batteryVoltage: Double? { bluetooth.batteryVoltage ?? model.vehicle?.batteryVoltage }
@@ -720,62 +737,83 @@ private struct WheelButton: View {
     }
 }
 
-private struct CarPlayView: View {
+/// The dash tab: Smart Auto's own screen on the bike's dash, which keeps running with the phone
+/// locked, and screen share as the alternative.
+private struct DashTabView: View {
+    @ObservedObject var dashScreen: DashScreenService
     @StateObject private var launcher = BroadcastLauncher()
-    @StateObject private var ownDash = LockedDashTest()
+
+    init(dashScreen: DashScreenService) {
+        self.dashScreen = dashScreen
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Image(systemName: "car.side.fill")
-                            .font(.system(size: 34))
-                            .foregroundStyle(.cyan)
-                        Text("CarPlay บนหน้าจอรถ")
-                            .font(.title2.bold())
-                        Text("เชื่อมต่อ Wi-Fi ของรถ (ZT_…) ก่อน แล้วกดแชร์หน้าจอเพื่อส่งภาพจาก iPhone ขึ้นจอรถ")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 14) {
+                            Image(systemName: "speedometer")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(statusColor)
+                                .frame(width: 46, height: 46)
+                                .background(statusColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("จอ Smart Auto")
+                                    .font(.headline)
+                                Text(statusText)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        Button {
+                            dashScreen.isRunning ? dashScreen.stop() : dashScreen.start()
+                        } label: {
+                            Text(dashScreen.isRunning ? "ปิดจอ Smart Auto" : "เปิดจอ Smart Auto")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .tint(dashScreen.isRunning ? .red : .accentColor)
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 6)
+                } footer: {
+                    Text("แสดงแผนที่ เวลา ความเร็ว และสถานะรถบนจอรถ ทำงานต่อได้แม้ล็อกโทรศัพท์ ต่อ Wi-Fi ของรถ (ZT_…) ก่อน และควรเสียบชาร์จระหว่างขี่")
                 }
 
-                Section("แชร์หน้าจอ") {
+                Section("ตัวเลือกอื่น") {
                     Button {
                         launcher.launch()
                     } label: {
                         Label("แชร์หน้าจอ iPhone", systemImage: "rectangle.on.rectangle")
                     }
+                    .disabled(dashScreen.isRunning)
                     .background(BroadcastPickerHost(launcher: launcher).frame(width: 1, height: 1))
 
-                    NavigationLink("การตั้งค่าจอและ log") {
+                    NavigationLink {
                         LegacyToolsView()
-                    }
-                }
-
-                Section {
-                    Button {
-                        ownDash.isRunning ? ownDash.stop() : ownDash.start()
                     } label: {
-                        Label(ownDash.isRunning ? "หยุดทดสอบ" : "เริ่มทดสอบจอของ Smart Auto",
-                              systemImage: ownDash.isRunning ? "stop.circle.fill" : "lock.display")
+                        Label("การตั้งค่าจอและ log", systemImage: "slider.horizontal.3")
                     }
-                    if ownDash.isRunning {
-                        Text("\(ownDash.message) · ส่งแล้ว \(ownDash.framesSent) เฟรม")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("ทดลอง: จอของ Smart Auto (ล็อกจอได้)")
-                } footer: {
-                    Text("หยุดแชร์หน้าจอก่อน กดเริ่ม รอจนจอรถขึ้นนาฬิกา แล้วกดล็อกโทรศัพท์ นาฬิกาบนจอรถต้องเดินต่อ")
                 }
             }
             .scrollContentBackground(.hidden)
             .background(Color.black)
-            .navigationTitle("CarPlay")
+            .navigationTitle("จอรถ")
         }
+    }
+
+    private var statusText: String {
+        guard dashScreen.isRunning else { return "ยังไม่เปิด" }
+        if dashScreen.state == .streaming { return "แสดงบนจอรถแล้ว · ล็อกโทรศัพท์ได้" }
+        return dashScreen.message.isEmpty ? dashScreen.state.title : dashScreen.message
+    }
+
+    private var statusColor: Color {
+        guard dashScreen.isRunning else { return .secondary }
+        return dashScreen.state == .streaming ? .green : .orange
     }
 }
 

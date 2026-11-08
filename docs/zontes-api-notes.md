@@ -123,3 +123,10 @@ Graphics, converts it with Accelerate, encodes it in software with minih264e
 and sends it through the same DashSession as screen share; location updates keep the app running
 when locked. The log tag is `OWNDASH`: one line every 10 s with fps, draw/encode time, frame size
 and whether the phone is locked.
+
+The phone-locked test worked on the 368G. Round A of the real screen (`DashScreenService`,
+`DashRenderer`, `DashMap`) replaces it: a CarPlay-Dashboard-style layout (Apple Maps snapshot on
+the left, time and ride/bike cards on the right) at 12 fps, opened from the new **จอรถ** tab. The
+Bluetooth monitor now lives in `MainShellView` so the dash can show battery and lock state. The log
+records whether `MKMapSnapshotter` renders with the phone locked ("Map snapshot ok/failed (phone
+locked)"), which decides how much round B (navigation) relies on maps prepared in advance.

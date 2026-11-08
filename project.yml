@@ -48,13 +48,13 @@ targets:
         NSBonjourServices:
           - _EasyConn._tcp
         ITSAppUsesNonExemptEncryption: false
-        # CarPlay direct runs behind iCarCast; location updates keep it running there.
+        # The dash screen keeps running behind the lock screen on location updates.
         # bluetooth-central reports the vehicle's Bluetooth dropping in the background, which
         # is when the parked spot is saved.
         UIBackgroundModes:
           - location
           - bluetooth-central
-        NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถ นำทางกลับไปหารถ และทำงานต่อเบื้องหลังขณะส่ง CarPlay ขึ้นจอรถ
+        NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อแสดงแผนที่และความเร็วบนจอรถ จำจุดจอดรถ และนำทางกลับไปหารถ รวมถึงทำงานต่อขณะล็อกโทรศัพท์
         NSLocationAlwaysAndWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถเมื่อคุณเดินออกห่างจากรถ แม้ไม่ได้เปิดแอป
         NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อสั่งงานรถ ZONTES และช่วยหารถเมื่ออยู่ใกล้
         # Navigation to the parked spot opens Google Maps when it is installed.
