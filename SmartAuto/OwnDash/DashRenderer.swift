@@ -173,13 +173,21 @@ final class DashRenderer {
         let center = CGPoint(x: pane.midX, y: pane.midY)
         if let position = scene.position ?? scene.location?.coordinate {
             if let map = scene.map {
-                // Keep where we are at the centre of the pane, whichever picture is current.
+                // Keep where we are at the centre of the pane, turned to our heading.
                 let here = map.pixel(for: position)
-                drawImage(map.image, in: CGRect(x: center.x - here.x, y: center.y - here.y,
+                context.saveGState()
+                context.translateBy(x: center.x, y: center.y)
+                if let course = scene.course { context.rotate(by: -CGFloat(course) * .pi / 180) }
+                drawImage(map.image, in: CGRect(x: -here.x, y: -here.y,
                                                 width: CGFloat(map.image.width), height: CGFloat(map.image.height)),
                           context: context)
+                context.restoreGState()
             }
-            drawDot(at: center, context: context)
+            if scene.course != nil {
+                drawArrowPuck(at: center, context: context)
+            } else {
+                drawDot(at: center, context: context)
+            }
         } else {
             drawText("กำลังหาตำแหน่ง", font: bodyFont, color: colors.secondary,
                      at: CGPoint(x: center.x, y: center.y + 9), alignment: .center, context: context)

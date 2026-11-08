@@ -15,6 +15,10 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var message = ""
     /// What the dash shows, a few times a second, for the app's own view of it.
     @Published private(set) var preview: CGImage?
+    /// For the phone's full-screen map, which repeats the dash's cards.
+    @Published private(set) var speedKmh: Int?
+    @Published private(set) var vehicle = DashScene.Vehicle()
+    private var phoneMapVisible = false
 
     /// The app is showing the preview; frames are only copied for it while it is visible and the
     /// app is in front.
@@ -47,6 +51,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.activityType = .automotiveNavigation
         locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.headingFilter = 1
         let store = store
         maps.onMap = { store.set(map: $0) }
         navigator.onRoute = { [weak self] route in
@@ -71,7 +76,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
             return
         }
 
-        startLocation()
+        startLocation(background: true)
         let dash = DashSession(profile: profile) { EventLog.record("DASH", $0) }
         dash.onEvent = { [weak self, weak loop] event in
             switch event {
@@ -118,7 +123,10 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.set(mode: .overview)
         store.set(map: nil)
         store.set(navigation: nil)
-        locationManager.stopUpdatingLocation()
+        if !phoneMapVisible {
+            locationManager.stopUpdatingLocation()
+            locationManager.stopUpdatingHeading()
+        }
         locationManager.allowsBackgroundLocationUpdates = false
         isRunning = false
         preview = nil
@@ -127,6 +135,18 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     private func updatePreview() {
         loop?.previewEnabled = previewEnabled && appActive
+    }
+
+    /// The phone's full-screen map is open: keep location and the compass going for its cards even
+    /// when the dash is off.
+    func phoneMap(visible: Bool) {
+        phoneMapVisible = visible
+        if visible {
+            startLocation(background: isRunning)
+        } else if !isRunning {
+            locationManager.stopUpdatingLocation()
+            locationManager.stopUpdatingHeading()
+        }
     }
 
     /// Asks for location permission if needed and a fresh fix, for search and routing.
@@ -158,13 +178,14 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     // MARK: State
 
-    private func startLocation() {
+    private func startLocation(background: Bool) {
         if locationManager.authorizationStatus == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
         }
-        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.allowsBackgroundLocationUpdates = background
         locationManager.showsBackgroundLocationIndicator = true
         locationManager.startUpdatingLocation()
+        if CLLocationManager.headingAvailable() { locationManager.startUpdatingHeading() }
     }
 
     private func setState(_ newState: BroadcastState, _ text: String) {
@@ -180,7 +201,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         let zoom = DashSettings.zoom
         store.set(zoom: zoom)
         maps.set(zoom: zoom)
-        store.set(vehicle: vehicleSource?() ?? DashScene.Vehicle())
+        let vehicle = vehicleSource?() ?? DashScene.Vehicle()
+        if vehicle != self.vehicle { self.vehicle = vehicle }
+        store.set(vehicle: vehicle)
         store.set(navigation: navigator.sceneNavigation())
         if !navigator.isNavigating { maps.set(mode: .overview) }
     }
@@ -208,6 +231,8 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     private func handle(_ location: CLLocation) {
         lastLocation = location
+        let speed = location.speed >= 0 ? Int((location.speed * 3.6).rounded()) : nil
+        if speed != speedKmh { speedKmh = speed }
         guard isRunning else { return }
         store.set(location: location)
         navigator.update(with: location)
@@ -222,6 +247,16 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last, location.horizontalAccuracy >= 0 else { return }
         Task { @MainActor in self.handle(location) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        guard newHeading.headingAccuracy >= 0, newHeading.headingAccuracy < 45 else { return }
+        let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        Task { @MainActor in self.store.set(compass: heading) }
+    }
+
+    nonisolated func locationManagerShouldDisplayHeadingCalibration(_ manager: CLLocationManager) -> Bool {
+        false
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -316,7 +351,7 @@ final class DashFrameLoop {
 
         let drawStart = DispatchTime.now().uptimeNanoseconds
         var scene = store.scene()
-        (scene.position, scene.course) = motion.step(latest: scene.location, now: scene.date)
+        (scene.position, scene.course) = motion.step(latest: scene.location, compass: scene.compass, now: scene.date)
         renderer.draw(scene, in: context)
         if frameIndex % 4 == 0, previewEnabled, let image = context.makeImage() {
             onPreview?(image)

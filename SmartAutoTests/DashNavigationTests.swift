@@ -99,6 +99,33 @@ final class DashNavigationTests: XCTestCase {
     }
 }
 
+extension DashNavigationTests {
+    /// Phone mounted sideways: its compass reads 270 while the bike heads north. After a short ride
+    /// the offset is learned, and stopped, turning the bike 30 degrees turns the map 30 degrees.
+    func testCompassLearnsTheMountAndTurnsWhenStopped() {
+        let time = Date()
+        let start = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0)
+        var motion = DashMotion()
+        for second in 0 ..< 15 {
+            let now = time.addingTimeInterval(Double(second))
+            let fix = CLLocation(coordinate: start, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5,
+                                 course: 0, speed: 10, timestamp: now)
+            _ = motion.step(latest: fix, compass: CompassSample(heading: 270, time: now), now: now)
+        }
+        XCTAssertTrue(motion.compassTrusted)
+
+        let stoppedAt = time.addingTimeInterval(20)
+        let parked = CLLocation(coordinate: start, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5,
+                                course: -1, speed: 0, timestamp: stoppedAt)
+        var heading: Double?
+        for frame in 0 ..< 40 {
+            let now = stoppedAt.addingTimeInterval(Double(frame) / 20)
+            heading = motion.step(latest: parked, compass: CompassSample(heading: 300, time: now), now: now).1
+        }
+        XCTAssertEqual(heading ?? -1, 30, accuracy: 1)
+    }
+}
+
 private extension CLLocationCoordinate2D {
     func offsetNorth(_ meters: Double) -> CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude + meters / 110_540, longitude: longitude)

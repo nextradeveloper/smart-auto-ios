@@ -42,8 +42,11 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIRequiresFullScreen: true
+        # Portrait; the full-screen dash map turns landscape (OrientationLock in SmartAutoApp.swift).
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSLocalNetworkUsageDescription: Smart Auto ต้องคุยกับจอรถผ่าน Wi-Fi ของรถเพื่อส่งภาพขึ้นจอ
         NSBonjourServices:
           - _EasyConn._tcp

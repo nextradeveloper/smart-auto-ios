@@ -147,3 +147,10 @@ overview picture is kept on disk (per theme) and shown at once on start. Added: 
 light / follow the iPhone), route options (avoid highways, avoid tolls via
 `MKDirections.Request.highwayPreference/tollPreference`), and the จอรถ tab shows a live preview of
 the dash with the search bar, recent places and the turn card under it.
+
+Heading (2026-11-08): the map turned late because GPS course updates once a second and only when
+moving, and the Dashboard map did not turn at all. `DashMotion` now learns, while riding above
+4 m/s, the angle between the phone's compass and the GPS course; once that holds steady (phone in a
+mount) compass plus the angle is the heading, live and also stopped. In a pocket it never steadies
+and GPS course is used. The Dashboard map turns too (square 1280 px pictures). The phone's
+full-screen map is landscape with the dash's layout (OrientationLock in SmartAutoApp.swift).

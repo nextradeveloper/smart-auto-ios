@@ -43,6 +43,14 @@ struct DashScene {
     var style: DashStyle = .dark
     /// Guidance map scale when no picture has arrived yet (the picture carries its own).
     var guidanceMetersPerPixel = 1.25
+    /// The phone's compass, many times a second; DashMotion turns it into the bike's heading.
+    var compass: CompassSample?
+}
+
+/// One compass reading: degrees clockwise from north, and when.
+struct CompassSample: Equatable {
+    let heading: Double
+    let time: Date
 }
 
 /// A rendered map picture and the Web Mercator rectangle it covers, so any coordinate can be
@@ -73,6 +81,7 @@ final class DashSceneStore {
     private var navigation: DashScene.Navigation?
     private var style: DashStyle = .dark
     private var zoom = 1.0
+    private var compass: CompassSample?
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -98,10 +107,14 @@ final class DashSceneStore {
         lock.lock(); self.zoom = zoom; lock.unlock()
     }
 
+    func set(compass heading: Double) {
+        lock.lock(); compass = CompassSample(heading: heading, time: Date()); lock.unlock()
+    }
+
     func scene() -> DashScene {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
-                         style: style, guidanceMetersPerPixel: 1.25 * zoom)
+                         style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass)
     }
 }
 
@@ -110,18 +123,34 @@ final class DashSceneStore {
 /// Without it the map jumped once a second, which read as stutter on the dash. Standing still, GPS
 /// wanders a few metres a second; that is held, not followed (field log 2026-11-08: 20 fps on the
 /// wire and still "กระตุก" with the bike parked).
+///
+/// Heading: GPS course only updates once a second and only when moving, so the map turned late. The
+/// compass updates many times a second but says where the phone points, not the bike. While riding,
+/// the angle between the two is learned; once it holds steady (phone in a mount), compass plus that
+/// angle is the heading, live and also when slow or stopped. In a pocket it never holds steady, and
+/// GPS course is used as before.
 struct DashMotion {
     private var fix: CLLocation?
     private var shown: MKMapPoint?
     private var shownCourse: Double?
     private var lastCourse: Double?
+    /// Bike heading minus compass, learned while moving, and how far it strays.
+    private var mountOffset: Double?
+    private var offsetError = 180.0
+
+    /// Whether the compass, with the learned offset, is trusted for the heading.
+    var compassTrusted: Bool { mountOffset != nil && offsetError < 15 }
 
     /// Call every frame with the latest fix; returns where to draw us and which way we face.
-    mutating func step(latest: CLLocation?, now: Date = Date()) -> (CLLocationCoordinate2D?, Double?) {
+    mutating func step(latest: CLLocation?, compass: CompassSample? = nil,
+                       now: Date = Date()) -> (CLLocationCoordinate2D?, Double?) {
         guard let latest else { return (nil, nil) }
         if fix?.timestamp != latest.timestamp {
             fix = latest
-            if latest.course >= 0, latest.speed > 1.5 { lastCourse = latest.course }
+            if latest.course >= 0, latest.speed > 1.5 {
+                lastCourse = latest.course
+                learnOffset(course: latest.course, speed: latest.speed, compass: compass, now: now)
+            }
         }
 
         // Carry the fix forward, at most 1.5 s, so a late fix does not send us flying.
@@ -153,16 +182,42 @@ struct DashMotion {
             shown = target
         }
 
-        if let course = lastCourse {
+        var heading = lastCourse
+        if compassTrusted, let compass, let offset = mountOffset, now.timeIntervalSince(compass.time) < 1 {
+            heading = Self.normalize(compass.heading + offset)
+        }
+        if let heading {
             if let current = shownCourse {
-                var change = course - current
-                while change > 180 { change -= 360 }
-                while change <= -180 { change += 360 }
-                shownCourse = (current + change * 0.2 + 360).truncatingRemainder(dividingBy: 360)
+                shownCourse = Self.normalize(current + Self.difference(heading, current) * 0.25)
             } else {
-                shownCourse = course
+                shownCourse = heading
             }
         }
         return (shown?.coordinate, shownCourse)
+    }
+
+    private mutating func learnOffset(course: Double, speed: Double, compass: CompassSample?, now: Date) {
+        // Only well under way, with a fresh compass reading.
+        guard speed > 4, let compass, now.timeIntervalSince(compass.time) < 1 else { return }
+        let measured = Self.difference(course, compass.heading)
+        guard let offset = mountOffset else {
+            mountOffset = measured
+            return
+        }
+        let error = abs(Self.difference(measured, offset))
+        offsetError = offsetError * 0.8 + error * 0.2
+        mountOffset = Self.normalize(offset + Self.difference(measured, offset) * 0.15)
+    }
+
+    /// a - b in degrees, in (-180, 180].
+    static func difference(_ a: Double, _ b: Double) -> Double {
+        var change = a - b
+        while change > 180 { change -= 360 }
+        while change <= -180 { change += 360 }
+        return change
+    }
+
+    static func normalize(_ degrees: Double) -> Double {
+        (degrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
     }
 }

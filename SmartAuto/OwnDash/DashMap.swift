@@ -16,13 +16,15 @@ import UniformTypeIdentifiers
 @MainActor
 final class DashMapProvider: ObservableObject {
     enum Mode: Equatable, Sendable {
-        /// North up, about a metre a pixel, around us: the Dashboard screen.
+        /// Around us, about a metre a pixel, turned to our heading: the Dashboard screen.
         case overview
         /// Turned to our heading by the renderer, so square and larger: the guidance screen.
         case guidance
 
         var pixels: CGSize {
-            self == .overview ? CGSize(width: 1152, height: 768) : CGSize(width: 2048, height: 2048)
+            // Square, so turning never shows an edge: the overview pane (824x496) reaches 481 px from
+            // its centre, guidance (1280x528 around the puck) about 830.
+            self == .overview ? CGSize(width: 1280, height: 1280) : CGSize(width: 2048, height: 2048)
         }
         /// At zoom 1; DashSettings.zoom multiplies it.
         var metersPerPixel: Double { self == .overview ? 1.0 : 1.25 }

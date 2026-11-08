@@ -21,32 +21,41 @@ struct DashMapScreen: View {
                            recenter: recenter, dark: isDark) { place in chosen = place }
                 .ignoresSafeArea()
 
-            VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
+            // The dash's layout, landscape: turn card top left, time top right, speed bottom right.
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading) {
                     if navigator.isNavigating {
                         DashGuidanceBanner(navigator: navigator)
                             .padding(16)
+                            .frame(width: 340, alignment: .leading)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
-                    Spacer(minLength: 0)
-                    MapButton(symbol: "xmark") { dismiss() }
-                }
-                Spacer()
-                HStack(alignment: .bottom) {
+                    Spacer()
                     if navigator.isNavigating {
                         MapButton(symbol: "xmark.circle.fill", tint: .red) { dashScreen.stopNavigation() }
                     }
-                    Spacer()
-                    VStack(spacing: 10) {
-                        dashZoomControl
-                        MapButton(symbol: threeD ? "view.2d" : "view.3d") { threeD.toggle() }
-                        MapButton(symbol: "location.fill", tint: .blue) { recenter += 1 }
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 12) {
+                    HStack(spacing: 10) {
+                        timePill
+                        MapButton(symbol: "xmark") { dismiss() }
+                    }
+                    Spacer(minLength: 8)
+                    HStack(alignment: .bottom, spacing: 10) {
+                        VStack(spacing: 10) {
+                            dashZoomControl
+                            MapButton(symbol: threeD ? "view.2d" : "view.3d") { threeD.toggle() }
+                            MapButton(symbol: "location.fill", tint: .blue) { recenter += 1 }
+                        }
+                        speedDial
                     }
                 }
             }
-            .padding(16)
+            .padding(12)
         }
         .preferredColorScheme(isDark ? .dark : .light)
+        .statusBarHidden()
         .sheet(item: $chosen) { place in
             NavigationStack {
                 DashRoutePreview(destination: place, dashScreen: dashScreen) { chosen = nil }
@@ -56,9 +65,43 @@ struct DashMapScreen: View {
                         }
                     }
             }
-            .presentationDetents([.medium, .large])
         }
-        .onAppear { dashScreen.prepareLocation() }
+        .onAppear {
+            OrientationLock.set(.landscape, rotateTo: .landscapeRight)
+            dashScreen.phoneMap(visible: true)
+        }
+        .onDisappear {
+            OrientationLock.set(.portrait, rotateTo: .portrait)
+            dashScreen.phoneMap(visible: false)
+        }
+    }
+
+    private var timePill: some View {
+        TimelineView(.everyMinute) { context in
+            HStack(spacing: 8) {
+                if dashScreen.vehicle.connected, let voltage = dashScreen.vehicle.voltage {
+                    Image(systemName: DashRenderer.batterySymbol(voltage))
+                        .foregroundStyle(voltage >= 12.2 ? .green : (voltage >= 11.8 ? .yellow : .red))
+                }
+                Text(DashGuidanceBanner.clock(context.date))
+                    .font(.title3.weight(.semibold).monospacedDigit())
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 48)
+            .background(.regularMaterial, in: Capsule())
+        }
+    }
+
+    private var speedDial: some View {
+        VStack(spacing: 0) {
+            Text(dashScreen.speedKmh.map(String.init) ?? "–")
+                .font(.system(size: 34, weight: .semibold).monospacedDigit())
+            Text("กม./ชม.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 92, height: 92)
+        .background(.regularMaterial, in: Circle())
     }
 
     private var isDark: Bool {
