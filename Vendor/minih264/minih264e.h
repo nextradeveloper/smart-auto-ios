@@ -370,9 +370,10 @@ void H264E_set_vbv_state(
 #elif defined(__linux__) || defined(__CYGWIN__)
 #include <endian.h>
 #elif defined(__APPLE__)
-#include <libkern/OSByteOrder.h>
-#define __BYTE_ORDER BYTE_ORDER
-#define __BIG_ENDIAN BIG_ENDIAN
+/* Smart Auto: BYTE_ORDER/BIG_ENDIAN are not defined here, so both read as 0 and the bitstream
+   came out byte-swapped on iOS arm64. Use the compiler's own macros. */
+#define __BYTE_ORDER __BYTE_ORDER__
+#define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
 #elif defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
 #include <sys/endian.h>
 #else
