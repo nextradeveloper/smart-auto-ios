@@ -150,6 +150,7 @@ private struct DarkField<Field: View>: View {
 }
 
 private struct MainShellView: View {
+    @EnvironmentObject private var model: ZontesAppModel
     @State private var selection = 0
     /// Owned here so the dash screen can show the bike's battery and lock from any tab.
     @StateObject private var bluetooth = VehicleBluetoothMonitor()
@@ -165,7 +166,7 @@ private struct MainShellView: View {
                 .tabItem { TabIcon.dash; Text("จอรถ") }
                 .tag(1)
 
-            ServiceView()
+            ServiceView(trips: dashScreen.trips)
                 .tabItem { TabIcon.service; Text("Service") }
                 .tag(2)
 
@@ -180,13 +181,22 @@ private struct MainShellView: View {
             monitor.onLinkChange = { [weak screen] up in screen?.bikeLink(up) }
             screen.startAutoConnect()
             if monitor.status.isPositive { screen.bikeLink(true) }
+            let cloud = model
             dashScreen.vehicleSource = {
-                DashScene.Vehicle(
+                let car = cloud.vehicle
+                // Both zero means the bike has not reported fuel, not an empty tank.
+                let reported = (car?.fuelPercent ?? 0) > 0 || (car?.rangeKilometers ?? 0) > 0
+                return DashScene.Vehicle(
                     connected: monitor.status.isPositive,
                     locked: monitor.isLocked,
-                    voltage: monitor.batteryVoltage
+                    voltage: monitor.batteryVoltage,
+                    fuelPercent: reported ? car?.fuelPercent : nil,
+                    rangeKm: reported ? car?.rangeKilometers.flatMap { $0 > 0 ? $0 : nil } : nil,
+                    frontTireKPa: car?.frontTireKPa,
+                    rearTireKPa: car?.rearTireKPa
                 )
             }
+            dashScreen.refreshVehicleData = { [weak cloud] in await cloud?.refreshQuietly() }
         }
     }
 }
@@ -227,6 +237,10 @@ private struct VehicleDashboardView: View {
     @State private var showsFinder = false
     /// Seat or fuel lid that just opened; lit for a few seconds, as in the official app.
     @State private var justOpened: VehicleCommand?
+    /// After the fuel lid opens or the fuel level jumps: offer to log the fill-up for a while.
+    @State private var fuelPromptUntil: Date?
+    @State private var showsFuelEntry = false
+    @State private var lastFuelPercent: Int?
 
     init(bluetooth: VehicleBluetoothMonitor) {
         self.bluetooth = bluetooth
@@ -272,6 +286,18 @@ private struct VehicleDashboardView: View {
         .onAppear { configureBluetooth() }
         .onChange(of: model.vehicle?.carCode) { _ in configureBluetooth() }
         .onChange(of: model.vehicle?.mcuID) { _ in configureBluetooth() }
+        .onChange(of: model.vehicle?.fuelPercent) { fuel in
+            if let fuel, let before = lastFuelPercent, fuel - before >= 20 {
+                fuelPromptUntil = Date().addingTimeInterval(20 * 60)
+            }
+            if let fuel { lastFuelPercent = fuel }
+        }
+        .overlay(alignment: .bottom) {
+            if let until = fuelPromptUntil, until > Date() { fuelPrompt }
+        }
+        .sheet(isPresented: $showsFuelEntry, onDismiss: { fuelPromptUntil = nil }) {
+            FuelEntryView(fill: nil)
+        }
     }
 
     private func configureBluetooth() {
@@ -288,12 +314,32 @@ private struct VehicleDashboardView: View {
                 try await bluetooth.send(command)
                 guard command == .seat || command == .fuelLid else { return }
                 justOpened = command
+                if command == .fuelLid { fuelPromptUntil = Date().addingTimeInterval(20 * 60) }
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if justOpened == command { justOpened = nil }
             } catch {
                 model.message = error.localizedDescription
             }
         }
+    }
+
+    private var fuelPrompt: some View {
+        HStack(spacing: 14) {
+            Button { showsFuelEntry = true } label: {
+                Label("บันทึกการเติมน้ำมัน", systemImage: "fuelpump.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            Button { fuelPromptUntil = nil } label: {
+                Image(systemName: "xmark")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("ไม่บันทึก")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.bottom, 10)
     }
 
     private func refreshAll() {
@@ -985,10 +1031,23 @@ private struct RecentPlaceRow: View {
 
 private struct ServiceView: View {
     @EnvironmentObject private var model: ZontesAppModel
+    @ObservedObject var trips: TripRecorder
+    @ObservedObject private var fuel = FuelLog.shared
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink { TripsView(recorder: trips) } label: {
+                        RideLinkRow(symbol: "point.topleft.down.curvedto.point.bottomright.up", tint: .blue, title: "ทริป",
+                                    value: trips.current != nil ? "กำลังบันทึก" : (trips.trips.isEmpty ? "" : "\(trips.trips.count)"))
+                    }
+                    NavigationLink { FuelLogView() } label: {
+                        RideLinkRow(symbol: "fuelpump.fill", tint: .orange, title: "เติมน้ำมัน",
+                                    value: fuel.stats.overallKmPerLiter.map { String(format: "%.1f กม./ลิตร", $0) } ?? "")
+                    }
+                }
+
                 Section("ข้อมูลรถ") {
                     MetricRow(title: "แบตเตอรี่", value: model.vehicle?.batteryVoltage.map { String(format: "%.1f V", $0) } ?? "--")
                     MetricRow(title: "ลมยางหน้า", value: model.vehicle?.frontTireKPa.map { "\($0) kPa" } ?? "--")
@@ -1009,6 +1068,28 @@ private struct ServiceView: View {
             .scrollContentBackground(.hidden)
             .background(Color.black)
             .navigationTitle("Service")
+        }
+    }
+}
+
+private struct RideLinkRow: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(tint, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(title)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
     }
 }

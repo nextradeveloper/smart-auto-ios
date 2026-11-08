@@ -11,9 +11,22 @@ enum DashStyle: Equatable, Sendable {
 /// Everything one dash frame shows, copied out of the live state so drawing never waits on it.
 struct DashScene {
     struct Vehicle: Equatable {
+        /// Bluetooth to the bike.
         var connected = false
         var locked: Bool?
         var voltage: Double?
+        /// From ZONTES' service (the bike reports over its own SIM): nil when not reported.
+        var fuelPercent: Int?
+        var rangeKm: Int?
+        var frontTireKPa: Int?
+        var rearTireKPa: Int?
+    }
+
+    /// One warning at a time, shown on the dash and said once (RideAlerts).
+    struct Alert: Equatable {
+        let text: String
+        let critical: Bool
+        let spoken: String
     }
 
     struct Navigation {
@@ -51,6 +64,7 @@ struct DashScene {
     var threeD = true
     /// Layout mirrored left to right.
     var mapOnRight = false
+    var alert: Alert?
 }
 
 /// One compass reading: degrees clockwise from north, and when.
@@ -90,6 +104,7 @@ final class DashSceneStore {
     private var compass: CompassSample?
     private var threeD = true
     private var mapOnRight = false
+    private var alert: DashScene.Alert?
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -115,6 +130,10 @@ final class DashSceneStore {
         lock.lock(); self.zoom = zoom; lock.unlock()
     }
 
+    func set(alert: DashScene.Alert?) {
+        lock.lock(); self.alert = alert; lock.unlock()
+    }
+
     func set(mapOnRight: Bool) {
         lock.lock(); self.mapOnRight = mapOnRight; lock.unlock()
     }
@@ -131,7 +150,7 @@ final class DashSceneStore {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
                          style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass, threeD: threeD,
-                         mapOnRight: mapOnRight)
+                         mapOnRight: mapOnRight, alert: alert)
     }
 }
 

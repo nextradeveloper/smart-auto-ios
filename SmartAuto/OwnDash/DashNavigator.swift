@@ -101,6 +101,16 @@ final class DashNavigator: ObservableObject {
 
     var isNavigating: Bool { status != .idle }
 
+    /// Metres to the next stop, or to the destination when no stop is left; nil when not guiding.
+    var distanceAhead: Double? {
+        guard let route, let progress, status == .guiding || status == .rerouting else { return nil }
+        let legIndex = route.legEnds.count - 1 - stops.count
+        if !stops.isEmpty, legIndex >= 0, legIndex < route.legEnds.count {
+            return max(0, route.legEnds[legIndex] - progress.distanceAlong)
+        }
+        return progress.remainingDistance
+    }
+
     private static func request(from origin: MKMapItem, to destination: MKMapItem) -> MKDirections.Request {
         let request = MKDirections.Request()
         request.source = origin

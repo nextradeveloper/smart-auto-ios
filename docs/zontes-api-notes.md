@@ -176,3 +176,16 @@ objects, and the first reply of each method is logged under CAM. No live view ex
 map and route from above into a 1832x600 buffer and copies it to the frame in 8-row bands scaled
 from 0.7 (top, far) to 1.3 (bottom, near), with 1/scale linear in the row (`Perspective`). One
 2D/3D setting (`dash.threeD`) drives the dash and the phone's full-screen map.
+
+Maps behind the lock screen: every snapshot in the field logs that worked was taken with the app
+in front. `DashTiles` saves 1024 px map tiles on a fixed Web Mercator grid (Caches/DashTiles, 60
+days, 400 MB) while the app is in front: 3 km around us close up, 15 km wide, and along the whole
+route. Behind the lock screen the picture is composed from them with Core Graphics; a live snapshot
+is still tried once there and used if it works.
+
+Ride data: the fuel percentage (`Oil`), range (`Range`) and tyres (`PressureFront/Rear` × 2 = kPa)
+from the home snapshot feed the dash (ride card, warnings in `RideAlerts`) and the route preview's
+"fuel may not last" check with a station on the route (`FuelPlanner`); the snapshot is refreshed
+every 3 minutes while the dash screen is on. Trips (`SmartAuto/Ride/TripLog.swift`) are recorded
+while the dash screen is on; lean is estimated as atan(speed × yaw rate / g). Fill-ups
+(`FuelLog.swift`) give km per litre from full tank to full tank.

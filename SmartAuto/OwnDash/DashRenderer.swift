@@ -119,12 +119,16 @@ final class DashRenderer {
                 ("lock.open.fill", 24, palette.yellow), ("bolt.slash.fill", 24, palette.secondary),
                 ("battery.100", 26, palette.green), ("battery.75", 26, palette.green),
                 ("battery.50", 26, palette.yellow), ("battery.25", 26, palette.red),
-                ("arrow.triangle.2.circlepath", 60, palette.label),
+                ("arrow.triangle.2.circlepath", 60, palette.label), ("fuelpump.fill", 24, palette.label),
             ]
             wanted += DashManeuver.allSymbols.map { ($0, 60, palette.label) }
             for (name, point, color) in wanted {
                 symbols[Self.symbolKey(name, style)] = Self.symbol(name, pointSize: point, color: UIColor(cgColor: color))
             }
+            symbols[Self.symbolKey("alert.warning", style)] =
+                Self.symbol("exclamationmark.triangle.fill", pointSize: 24, color: UIColor(cgColor: palette.yellow))
+            symbols[Self.symbolKey("alert.critical", style)] =
+                Self.symbol("exclamationmark.triangle.fill", pointSize: 24, color: UIColor(cgColor: palette.red))
         }
     }
 
@@ -227,8 +231,16 @@ final class DashRenderer {
         let left = rect.minX + Layout.cardPadding
         drawText(timeFormatter.string(from: scene.date), font: clockFont, color: colors.label,
                  at: CGPoint(x: left, y: rect.minY + 140), context: context)
-        drawText(dateFormatter.string(from: scene.date), font: bodyFont, color: colors.secondary,
-                 at: CGPoint(x: left, y: rect.minY + 196), context: context)
+        // A warning takes the date's place: it matters more.
+        if let alert = scene.alert {
+            drawSymbol(alert.critical ? "alert.critical" : "alert.warning", at: CGPoint(x: left, y: rect.minY + 173),
+                       context: context)
+            drawText(alert.text, font: bodyStrongFont, color: colors.label, at: CGPoint(x: left + 38, y: rect.minY + 196),
+                     maxWidth: rect.width - Layout.cardPadding * 2 - 38, context: context)
+        } else {
+            drawText(dateFormatter.string(from: scene.date), font: bodyFont, color: colors.secondary,
+                     at: CGPoint(x: left, y: rect.minY + 196), context: context)
+        }
     }
 
     private func drawRideCard(_ scene: DashScene, in rect: CGRect, context: CGContext) {
@@ -245,6 +257,26 @@ final class DashRenderer {
 
         let rowBaseline = rect.minY + 204
         let vehicle = scene.vehicle
+        if let fuel = vehicle.fuelPercent {
+            // Fuel and range in words; the Bluetooth battery and lock as icons on the right.
+            drawSymbol("fuelpump.fill", at: CGPoint(x: left, y: rowBaseline - 23), context: context)
+            let end = drawText("\(fuel)%", font: bodyStrongFont, color: colors.label,
+                               at: CGPoint(x: left + 34, y: rowBaseline), context: context)
+            if let range = vehicle.rangeKm {
+                drawText(" · \(range) กม.", font: bodyFont, color: colors.secondary, at: CGPoint(x: end, y: rowBaseline),
+                         context: context)
+            }
+            guard vehicle.connected else { return }
+            var right = rect.maxX - Layout.cardPadding
+            if let locked = vehicle.locked {
+                right = drawSymbol(locked ? "lock.fill" : "lock.open.fill", endingAt: right, top: rowBaseline - 24,
+                                   context: context) - 14
+            }
+            if let voltage = vehicle.voltage {
+                drawSymbol(Self.batterySymbol(voltage), endingAt: right, top: rowBaseline - 22, context: context)
+            }
+            return
+        }
         guard vehicle.connected else {
             drawSymbol("bolt.slash.fill", at: CGPoint(x: left, y: rowBaseline - 24), context: context)
             drawText("รถยังไม่เชื่อม Bluetooth", font: bodyFont, color: colors.secondary,
@@ -298,6 +330,7 @@ final class DashRenderer {
         drawThenPill(navigation, context: context)
         drawArrivalCard(navigation, context: context)
         drawTimePill(scene, context: context)
+        drawAlertPill(scene, context: context)
         drawSpeedPill(scene, context: context)
     }
 
@@ -468,6 +501,26 @@ final class DashRenderer {
         }
     }
 
+    /// The warning, if any, under the time: an icon and a few words.
+    private func drawAlertPill(_ scene: DashScene, context: CGContext) {
+        guard let alert = scene.alert,
+              let icon = symbols[Self.symbolKey(alert.critical ? "alert.critical" : "alert.warning", style)] else { return }
+        let iconSize = CGSize(width: icon.width, height: icon.height)
+        let width = 20 + iconSize.width + 10 + textWidth(alert.text, font: headingFont) + 22
+        let rect = side(CGRect(x: size.width - Layout.margin - width, y: Layout.margin + 58 + 10, width: width, height: 50))
+        drawCard(rect, color: colors.cardOverMap, radius: 25, context: context)
+        drawImage(icon, in: CGRect(x: rect.minX + 20, y: rect.midY - iconSize.height / 2,
+                                   width: iconSize.width, height: iconSize.height), context: context)
+        drawText(alert.text, font: headingFont, color: colors.label,
+                 at: CGPoint(x: rect.minX + 30 + iconSize.width, y: rect.midY + 8), context: context)
+    }
+
+    private func textWidth(_ text: String, font: CTFont) -> CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): font]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    }
+
     private func drawSpeedPill(_ scene: DashScene, context: CGContext) {
         let diameter: CGFloat = 116
         let rect = side(CGRect(x: size.width - Layout.margin - diameter, y: size.height - Layout.margin - diameter,
@@ -529,6 +582,16 @@ final class DashRenderer {
         context.textPosition = CGPoint(x: x, y: point.y)
         CTLineDraw(line, context)
         return x + width
+    }
+
+    /// Draws a symbol whose right edge is at `right`; returns its left edge.
+    @discardableResult
+    private func drawSymbol(_ name: String, endingAt right: CGFloat, top: CGFloat, context: CGContext) -> CGFloat {
+        guard let image = symbols[Self.symbolKey(name, style)] else { return right }
+        let left = right - CGFloat(image.width)
+        drawImage(image, in: CGRect(x: left, y: top, width: CGFloat(image.width), height: CGFloat(image.height)),
+                  context: context)
+        return left
     }
 
     private func drawSymbol(_ name: String, at topLeft: CGPoint, context: CGContext) {

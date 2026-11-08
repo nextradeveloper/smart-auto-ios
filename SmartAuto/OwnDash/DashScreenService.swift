@@ -31,6 +31,10 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     let navigator = DashNavigator()
     let maps = DashMapProvider()
     private let voice = DashVoice()
+    let trips = TripRecorder()
+    /// Fetches the bike's fuel, range and tyres from ZONTES' service: at start, then every 3 minutes.
+    var refreshVehicleData: (@MainActor () async -> Void)?
+    private var sceneTicks = 0
 
     /// Bike state for the ride card; polled once a second while running.
     var vehicleSource: (@MainActor () -> DashScene.Vehicle)?
@@ -112,6 +116,8 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         loop.start()
         dash.start()
         isRunning = true
+        trips.begin()
+        if let refreshVehicleData { Task { await refreshVehicleData() } }
         setState(.connecting, "กำลังเชื่อมต่อจอรถ")
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshScene() }
@@ -135,6 +141,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         dash?.stop()
         loop = nil
         dash = nil
+        trips.end()
         navigator.stop()
         maps.reset()
         maps.set(mode: .overview)
@@ -164,6 +171,11 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
         }
+    }
+
+    /// The bike as known now, also while the dash screen is off.
+    func currentVehicle() -> DashScene.Vehicle {
+        vehicleSource?() ?? vehicle
     }
 
     /// Asks for location permission if needed and a fresh fix, for search and routing.
@@ -316,6 +328,11 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         let vehicle = vehicleSource?() ?? DashScene.Vehicle()
         if vehicle != self.vehicle { self.vehicle = vehicle }
         store.set(vehicle: vehicle)
+        let alert = RideAlerts.alert(for: vehicle, distanceAhead: navigator.distanceAhead)
+        store.set(alert: alert)
+        if let alert, isRunning { voice.alert(alert.spoken) }
+        sceneTicks += 1
+        if isRunning, sceneTicks % 180 == 0, let refreshVehicleData { Task { await refreshVehicleData() } }
         store.set(navigation: navigator.sceneNavigation())
         if !navigator.isNavigating { maps.set(mode: .overview) }
     }
@@ -347,6 +364,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         if speed != speedKmh { speedKmh = speed }
         guard isRunning else { return }
         store.set(location: location)
+        trips.add(location)
         navigator.update(with: location)
         maps.set(mode: navigator.isNavigating ? .guidance : .overview)
         maps.update(for: location)

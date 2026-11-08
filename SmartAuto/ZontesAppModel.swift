@@ -64,6 +64,12 @@ final class ZontesAppModel: ObservableObject {
         }
     }
 
+    /// Fresh fuel, range and tyres for the dash, without the busy indicator or error messages.
+    func refreshQuietly() async {
+        guard let session, !isBusy else { return }
+        if let fresh = try? await ZontesAPI.shared.vehicle(session: session) { vehicle = fresh }
+    }
+
     func send(_ command: VehicleCommand) async {
         guard let session, let vehicle else {
             message = ZontesError.missingVehicle.localizedDescription

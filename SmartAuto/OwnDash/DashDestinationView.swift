@@ -291,6 +291,9 @@ struct DashRoutePreview: View {
     @State private var loading = false
     @State private var addingStop = false
     @State private var editMode: EditMode = .inactive
+    @State private var addingFuel = false
+    @State private var fuelStops: Set<String> = []
+    @State private var fuelNote: String?
     @AppStorage(DashSettings.avoidHighwaysKey) private var avoidHighways = false
     @AppStorage(DashSettings.avoidTollsKey) private var avoidTolls = true
 
@@ -351,6 +354,12 @@ struct DashRoutePreview: View {
                     }
                 }
 
+                if let trip, let range = dashScreen.currentVehicle().rangeKm,
+                   !stops.contains(where: { fuelStops.contains($0.id) }),
+                   trip.distance > Double(range) * 1000 - 15_000 {
+                    Section { fuelWarning(trip: trip, range: range) }
+                }
+
                 Section {
                     Toggle("เลี่ยงทางด่วน/มอเตอร์เวย์", isOn: $avoidTolls)
                     Toggle("เลี่ยงทางหลวง", isOn: $avoidHighways)
@@ -395,6 +404,51 @@ struct DashRoutePreview: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    /// The tank will not last the route (range from the bike): offer a station on the way.
+    @ViewBuilder
+    private func fuelWarning(trip: DashTrip, range: Int) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("น้ำมันอาจไม่พอ")
+                    .font(.headline)
+                Text("วิ่งได้อีกราว \(range) กม. · เส้นทางนี้ \(DashFormat.distance(trip.distance))")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "fuelpump.fill")
+                .foregroundStyle(.orange)
+        }
+        Button { addFuelStop(trip: trip, range: range) } label: {
+            HStack {
+                Text(fuelNote ?? "เพิ่มปั๊มน้ำมันระหว่างทาง")
+                Spacer()
+                if addingFuel { ProgressView() }
+            }
+        }
+        .disabled(addingFuel)
+    }
+
+    @MainActor
+    private func addFuelStop(trip: DashTrip, range: Int) {
+        addingFuel = true
+        fuelNote = nil
+        let route = DashRoute(legs: trip.legs)
+        let target = FuelPlanner.target(routeDistance: route.distance, rangeMeters: Double(range) * 1000)
+        Task { @MainActor in
+            defer { addingFuel = false }
+            guard let station = await FuelPlanner.station(along: route, near: target) else {
+                fuelNote = "ไม่พบปั๊มใกล้เส้นทาง ลองเพิ่มจุดแวะเอง"
+                return
+            }
+            // In order along the route, among the stops already there.
+            let along = route.progress(at: station.coordinate, hint: nil).distanceAlong
+            let index = stops.firstIndex { route.progress(at: $0.coordinate, hint: nil).distanceAlong > along } ?? stops.count
+            fuelStops.insert(station.id)
+            if !stops.contains(station) { stops.insert(station, at: index) }
+        }
     }
 
     private var goBar: some View {

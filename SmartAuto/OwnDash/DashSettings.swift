@@ -24,6 +24,10 @@ enum DashSettings {
     static let autoConnectKey = "dash.autoConnect"
     static let voiceKey = "dash.voice"
     static let mapOnRightKey = "dash.mapOnRight"
+    static let recordTripsKey = "ride.recordTrips"
+
+    /// Rides recorded while the dash screen is on; on unless turned off.
+    static var recordTrips: Bool { UserDefaults.standard.object(forKey: recordTripsKey) as? Bool ?? true }
 
     /// Turn the dash screen on and off by itself, like RideScreen; on unless turned off.
     static var autoConnect: Bool { UserDefaults.standard.object(forKey: autoConnectKey) as? Bool ?? true }

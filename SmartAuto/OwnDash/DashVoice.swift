@@ -15,6 +15,7 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
     private var spoken: Set<Stage> = []
     private var lastStatus: DashNavigator.Status = .idle
     private var lastStopsReached = 0
+    private var alerted: [String: Date] = [:]
 
     override init() {
         super.init()
@@ -94,7 +95,15 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
         return String(format: "%.1f กิโลเมตร", kilometres)
     }
 
-    private func say(_ text: String) {
+    /// A warning (fuel, tyres), said once every half hour at most and after anything being said.
+    func alert(_ text: String) {
+        guard DashSettings.voice else { return }
+        if let last = alerted[text], Date().timeIntervalSince(last) < 30 * 60 { return }
+        alerted[text] = Date()
+        say(text, interrupt: false)
+    }
+
+    private func say(_ text: String, interrupt: Bool = true) {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .voicePrompt,
@@ -103,7 +112,7 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
         } catch {
             EventLog.record("VOICE", "Audio session failed: \(error.localizedDescription)")
         }
-        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        if interrupt, synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
         synthesizer.speak(utterance)
