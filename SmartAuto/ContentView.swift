@@ -750,6 +750,7 @@ private struct DashTabView: View {
     @AppStorage(DashSettings.themeKey) private var theme = DashSettings.Theme.dark.rawValue
     @AppStorage(DashSettings.avoidHighwaysKey) private var avoidHighways = false
     @AppStorage(DashSettings.avoidTollsKey) private var avoidTolls = false
+    @AppStorage(DashSettings.threeDKey) private var threeD = true
 
     init(dashScreen: DashScreenService) {
         self.dashScreen = dashScreen
@@ -795,6 +796,11 @@ private struct DashTabView: View {
                         ForEach(DashSettings.Theme.allCases) { option in
                             Text(option.title).tag(option.rawValue)
                         }
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("มุมมอง", selection: $threeD) {
+                        Text("2D").tag(false)
+                        Text("3D").tag(true)
                     }
                     .pickerStyle(.segmented)
                 }

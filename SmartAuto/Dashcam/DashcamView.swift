@@ -1,13 +1,11 @@
 import AVKit
 import SwiftUI
 
-/// The bike's camera: recordings from the front and rear cameras, photos, and a test for a live view.
+/// The bike's camera: recordings from the front and rear cameras, and photos.
 struct DashcamView: View {
     private enum Page: Hashable { case front, rear, photos }
 
     @State private var page: Page = .front
-    @State private var probing: String?
-    @State private var probeResult: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,33 +26,6 @@ struct DashcamView: View {
         }
         .navigationTitle("กล้องรถ")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if let probing {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                        Text(probing).font(.footnote)
-                    }
-                } else {
-                    Button("ทดสอบภาพสด") { probe() }
-                }
-            }
-        }
-        .alert("ทดสอบภาพสด", isPresented: Binding(get: { probeResult != nil }, set: { if !$0 { probeResult = nil } })) {
-            Button("ตกลง", role: .cancel) {}
-        } message: {
-            Text((probeResult ?? "") + "\nส่ง log ให้ดูผลละเอียด")
-        }
-    }
-
-    @MainActor
-    private func probe() {
-        probing = "เริ่ม"
-        Task {
-            let summary = await DashcamClient().probeLiveView { step in probing = step }
-            probing = nil
-            probeResult = summary
-        }
     }
 }
 
@@ -107,7 +78,8 @@ private struct DashcamRecordings: View {
             let client = DashcamClient()
             var loaded: [DashcamDay] = []
             for date in try await client.dates(camera) {
-                loaded.append(DashcamDay(date: date, times: try await client.times(camera, date: date)))
+                let times = (try? await client.times(camera, date: date)) ?? []
+                if !times.isEmpty { loaded.append(DashcamDay(date: date, times: times)) }
             }
             days = loaded
             failure = nil

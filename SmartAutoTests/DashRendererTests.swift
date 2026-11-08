@@ -59,6 +59,37 @@ final class DashRendererTests: XCTestCase {
         XCTAssertEqual(H264NAL.headers(inAnnexB: try XCTUnwrap(encoder.encode(context, keyFrame: true))), [0x67, 0x68, 0x65])
     }
 
+    func testThreeDGuidanceTiltsTheRouteAhead() throws {
+        let encoder = try XCTUnwrap(SoftwareVideoEncoder(width: 1280, height: 528, bitRate: 3_000_000, frameRate: 20))
+        let context = try XCTUnwrap(encoder.makeContext())
+        let renderer = DashRenderer(size: CGSize(width: 1280, height: 528))
+        let here = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0)
+        var scene = DashScene()
+        scene.position = here
+        scene.course = 0
+        scene.threeD = true
+        scene.navigation = DashScene.Navigation(
+            maneuver: .left, distanceToManeuver: 70, instruction: "เลี้ยวซ้าย", arrival: nil,
+            remainingDistance: 400, remainingTime: 60,
+            upcoming: [here, CLLocationCoordinate2D(latitude: 13.003, longitude: 100.0)],
+            status: .guiding, destinationName: "ทดสอบ")
+        renderer.draw(scene, in: context)
+
+        let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        func rgb(_ x: Int, _ y: Int) -> (Int, Int, Int) {
+            let offset = y * context.bytesPerRow + x * 4
+            return (Int(pixels[offset + 1]), Int(pixels[offset + 2]), Int(pixels[offset + 3]))
+        }
+        let ahead = rgb(640, 300)
+        XCTAssertGreaterThan(ahead.2, 200, "the route ahead is blue in 3D, got \(ahead)")
+        let beside = rgb(1000, 300)
+        XCTAssertLessThan(beside.2, 60, "beside the route is the empty map, got \(beside)")
+
+        let bands = Perspective.bands(height: 528, width: 1280)
+        XCTAssertLessThan(bands.first!.source.width, CGFloat(Perspective.planarWidth) + 1)
+        XCTAssertGreaterThan(bands.first!.source.width, bands.last!.source.width * 1.5, "far bands cover more ground")
+    }
+
     func testBatterySymbolFollowsVoltage() {
         XCTAssertEqual(DashRenderer.batterySymbol(12.7), "battery.100")
         XCTAssertEqual(DashRenderer.batterySymbol(12.1), "battery.75")

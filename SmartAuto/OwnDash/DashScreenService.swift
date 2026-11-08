@@ -200,6 +200,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.set(style: style)
         let zoom = DashSettings.zoom
         store.set(zoom: zoom)
+        store.set(threeD: DashSettings.threeD)
         maps.set(zoom: zoom)
         let vehicle = vehicleSource?() ?? DashScene.Vehicle()
         if vehicle != self.vehicle { self.vehicle = vehicle }

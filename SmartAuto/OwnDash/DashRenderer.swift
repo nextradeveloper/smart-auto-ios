@@ -57,6 +57,13 @@ final class DashRenderer {
     private static let white = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                                        components: [1, 1, 1, 1]) ?? CGColor(red: 1, green: 1, blue: 1, alpha: 1)
 
+    /// The guidance map seen from above, before it is tilted into perspective (3D).
+    private lazy var planar: CGContext? = CGContext(
+        data: nil, width: Perspective.planarWidth, height: Perspective.planarHeight, bitsPerComponent: 8,
+        bytesPerRow: Perspective.planarWidth * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+
     /// The palette of the frame being drawn.
     private var colors = Colors.dark
     private var style: DashStyle = .dark
@@ -255,7 +262,9 @@ final class DashRenderer {
         context.fill(CGRect(origin: .zero, size: size))
         let puck = Layout.guidancePuck
 
-        if let position = scene.position ?? scene.location?.coordinate {
+        if scene.threeD, let position = scene.position ?? scene.location?.coordinate, let planar {
+            drawPerspective(scene, navigation, at: position, planar: planar, context: context)
+        } else if let position = scene.position ?? scene.location?.coordinate {
             let course = scene.course ?? 0
             let pixelsPerPoint = scene.map?.pixelsPerMapPoint
                 ?? 1 / (scene.guidanceMetersPerPixel * MKMapPointsPerMeterAtLatitude(position.latitude))
@@ -280,6 +289,49 @@ final class DashRenderer {
         drawArrivalCard(navigation, context: context)
         drawTimePill(scene, context: context)
         drawSpeedPill(scene, context: context)
+    }
+
+    /// Perspective without a GPU: the map and route are drawn from above into `planar`, then copied
+    /// to the frame in thin bands, each scaled for its distance (far bands small, near ones large),
+    /// which tilts the ground away like Apple Maps' 3D driving view. A fade hides the far edge.
+    private func drawPerspective(_ scene: DashScene, _ navigation: DashScene.Navigation,
+                                 at position: CLLocationCoordinate2D, planar: CGContext, context: CGContext) {
+        let course = scene.course ?? 0
+        let pixelsPerPoint = scene.map?.pixelsPerMapPoint
+            ?? 1 / (scene.guidanceMetersPerPixel * MKMapPointsPerMeterAtLatitude(position.latitude))
+
+        planar.saveGState()
+        planar.translateBy(x: 0, y: CGFloat(Perspective.planarHeight))
+        planar.scaleBy(x: 1, y: -1)
+        planar.interpolationQuality = .medium
+        planar.setFillColor(colors.emptyMap)
+        planar.fill(CGRect(x: 0, y: 0, width: Perspective.planarWidth, height: Perspective.planarHeight))
+        planar.translateBy(x: Perspective.planarPuck.x, y: Perspective.planarPuck.y)
+        planar.rotate(by: -CGFloat(course) * .pi / 180)
+        if let map = scene.map {
+            let here = map.pixel(for: position)
+            drawImage(map.image, in: CGRect(x: -here.x, y: -here.y,
+                                            width: CGFloat(map.image.width), height: CGFloat(map.image.height)),
+                      context: planar)
+        }
+        drawRoute(navigation.upcoming, from: MKMapPoint(position), pixelsPerPoint: pixelsPerPoint, context: planar)
+        planar.restoreGState()
+        guard let ground = planar.makeImage() else { return }
+
+        let bands = Perspective.bands(height: size.height, width: size.width)
+        for band in bands {
+            guard let slice = ground.cropping(to: band.source) else { continue }
+            drawImage(slice, in: band.destination, context: context)
+        }
+
+        // Fade the horizon into the background, as Apple's 3D view does.
+        let fadeHeight: CGFloat = 120
+        if let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                                     colors: [colors.emptyMap, colors.emptyMap.copy(alpha: 0) ?? colors.emptyMap] as CFArray,
+                                     locations: [0, 1]) {
+            context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: fadeHeight), options: [])
+        }
+        drawArrowPuck(at: Perspective.screenPuck, context: context)
     }
 
     /// The route as Apple Maps draws it: a blue line with a darker casing.
@@ -479,5 +531,52 @@ final class DashRenderer {
         return UIGraphicsImageRenderer(size: symbol.size, format: format).image { _ in
             symbol.draw(at: .zero)
         }.cgImage
+    }
+}
+
+/// The tilt of the 3D guidance view: how each screen row maps to the map seen from above.
+///
+/// Screen row y shows the ground at scale s(y), from 0.7 at the top (far) to 1.3 at the bottom
+/// (near), with 1/s linear in y as a camera looking down at an angle sees it. Integrating 1/s gives
+/// which row of the planar picture each screen row shows; the puck sits on screen row 430.
+enum Perspective {
+    static let farScale: CGFloat = 0.7
+    static let nearScale: CGFloat = 1.3
+    static let screenPuckRow: CGFloat = 430
+    static let planarWidth = 1832
+    static let planarHeight = 600
+    /// Where we are in the planar picture: centred, 499 rows down (what 430 screen rows integrate to).
+    static let planarPuck = CGPoint(x: CGFloat(planarWidth) / 2, y: 499)
+    static let screenPuck = CGPoint(x: 640, y: screenPuckRow)
+
+    struct Band {
+        let source: CGRect
+        let destination: CGRect
+    }
+
+    /// Screen height `height` in bands of about 8 rows, top to bottom.
+    static func bands(height: CGFloat, width: CGFloat) -> [Band] {
+        let a = 1 / farScale
+        let b = (1 / nearScale - 1 / farScale) / height
+        func planarRow(_ y: CGFloat) -> CGFloat {
+            // Planar row of screen row y: the puck's row minus the ground between y and the puck.
+            planarPuck.y - (a * (screenPuckRow - y) + b / 2 * (screenPuckRow * screenPuckRow - y * y))
+        }
+        var bands: [Band] = []
+        var y: CGFloat = 0
+        let step: CGFloat = 8
+        while y < height {
+            let next = min(height, y + step)
+            let scale = 1 / (a + b * (y + next) / 2)
+            let top = planarRow(y), bottom = planarRow(next)
+            let sourceWidth = width / scale
+            let source = CGRect(x: planarPuck.x - sourceWidth / 2, y: top, width: sourceWidth, height: max(1, bottom - top))
+                .integral
+                .intersection(CGRect(x: 0, y: 0, width: planarWidth, height: planarHeight))
+            // Overlap by a row so no seam shows between bands.
+            bands.append(Band(source: source, destination: CGRect(x: 0, y: y, width: width, height: next - y + 1)))
+            y = next
+        }
+        return bands
     }
 }

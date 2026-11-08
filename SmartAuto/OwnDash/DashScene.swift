@@ -45,6 +45,8 @@ struct DashScene {
     var guidanceMetersPerPixel = 1.25
     /// The phone's compass, many times a second; DashMotion turns it into the bike's heading.
     var compass: CompassSample?
+    /// Guidance map tilted into perspective.
+    var threeD = true
 }
 
 /// One compass reading: degrees clockwise from north, and when.
@@ -82,6 +84,7 @@ final class DashSceneStore {
     private var style: DashStyle = .dark
     private var zoom = 1.0
     private var compass: CompassSample?
+    private var threeD = true
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -107,6 +110,10 @@ final class DashSceneStore {
         lock.lock(); self.zoom = zoom; lock.unlock()
     }
 
+    func set(threeD: Bool) {
+        lock.lock(); self.threeD = threeD; lock.unlock()
+    }
+
     func set(compass heading: Double) {
         lock.lock(); compass = CompassSample(heading: heading, time: Date()); lock.unlock()
     }
@@ -114,7 +121,7 @@ final class DashSceneStore {
     func scene() -> DashScene {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
-                         style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass)
+                         style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass, threeD: threeD)
     }
 }
 

@@ -11,7 +11,7 @@ struct DashMapScreen: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(DashSettings.themeKey) private var theme = DashSettings.Theme.dark.rawValue
     @AppStorage(DashSettings.zoomKey) private var dashZoom = 1.0
-    @State private var threeD = true
+    @AppStorage(DashSettings.threeDKey) private var threeD = true
     @State private var recenter = 0
     @State private var chosen: DashDestination?
 

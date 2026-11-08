@@ -165,3 +165,14 @@ full-screen map is landscape with the dash's layout (OrientationLock in SmartAut
 app has no live view (its only RTSP reference is ExoPlayer's timeout constant). Smart Auto's
 camera page (`SmartAuto/Dashcam/`) plays and saves recordings, and "ทดสอบภาพสด" probes ports,
 RTSP and HTTP paths and JSON methods for a live stream; results go to the log under `CAM`.
+
+2026-11-08, second camera log: the camera answers VIDEO.DATE and PICTURE.INFO.LIST, so the
+recordings page's failure was in reading the next replies; parsing now accepts strings, numbers or
+objects, and the first reply of each method is logged under CAM. No live view exists: only 7686 and
+8081 are open, and 8081 is the dash firmware-update socket in the official app (`a/ap8.java`,
+`a/bm5.java`, "仪表升级"). The probe was removed.
+
+3D guidance on the dash: no GPU behind the lock screen, so `DashRenderer.drawPerspective` draws the
+map and route from above into a 1832x600 buffer and copies it to the frame in 8-row bands scaled
+from 0.7 (top, far) to 1.3 (bottom, near), with 1/scale linear in the row (`Perspective`). One
+2D/3D setting (`dash.threeD`) drives the dash and the phone's full-screen map.

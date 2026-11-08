@@ -20,6 +20,10 @@ enum DashSettings {
     static let avoidHighwaysKey = "dash.avoidHighways"
     static let avoidTollsKey = "dash.avoidTolls"
     static let zoomKey = "dash.zoom"
+    static let threeDKey = "dash.threeD"
+
+    /// Guidance map tilted like Apple Maps' 3D driving view (dash and phone); on unless turned off.
+    static var threeD: Bool { UserDefaults.standard.object(forKey: threeDKey) as? Bool ?? true }
 
     /// How far the dash map reaches: a multiplier on its metres per pixel, closest first.
     static let zoomLevels: [Double] = [0.6, 0.8, 1.0, 1.4, 2.0]
