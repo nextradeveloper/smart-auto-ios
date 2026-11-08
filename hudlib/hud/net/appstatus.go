@@ -3,6 +3,7 @@ package net
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -57,6 +58,11 @@ const (
 // as long as PXC is up.
 const appStatusRepeatEvery = time.Second
 
+// appStatusFirstAfterCarData is how long after the dash opens CAR_DATA the official app's
+// first FOREGROUND goes out (~130 ms, before CHECK_SN), as captured by RideScreen AA
+// (github.com/mgb1982/ridescreen-aa, PxcHandshake.startAppStatusLoop) on Zontes dashes.
+const appStatusFirstAfterCarData = 130 * time.Millisecond
+
 // Mode values from kh.b.a(int) and its two call sites in n0.java.
 const (
 	// AppStatusMirrorLive is "the phone is truly mirroring" - sent once the dash has
@@ -85,6 +91,9 @@ type PhoneScreen struct {
 	// can inject them: the 1000 MT-X paints our picture and never sends a touch, while the
 	// official app, which states this flag, gets them.
 	TouchInput bool
+	// AOAHid is written as enableAOAHid. The repeat mode sets it, as the official Zontes app
+	// does on these dashes.
+	AOAHid bool
 }
 
 // appStatusState is the per-session half of this file.
@@ -170,15 +179,15 @@ func buildAppStatusBody(screen PhoneScreen, mode int) ([]byte, error) {
 
 	// Key order does not matter to a JSON reader, and the names are the ones the SDK
 	// writes. enableAccessibility follows TouchInput: the host only sets it when it really
-	// forwards the dash's touches. enableAOAHid stays false - USB HID is an input path this
-	// library does not have.
+	// forwards the dash's touches. enableAOAHid follows AOAHid, false unless a mode copying
+	// the official Zontes app sets it.
 	return json.Marshal(map[string]any{
 		"mode":                mode,
 		"displayRotation":     rotation,
 		"width":               width,
 		"height":              height,
 		"enableAccessibility": screen.TouchInput,
-		"enableAOAHid":        false,
+		"enableAOAHid":        screen.AOAHid,
 	})
 }
 
@@ -237,9 +246,10 @@ func (s *PXCControl) noteAppStatus(mode int, err error) {
 }
 
 // StartAppStatusRepeat starts the repeating notification of SetAppStatusRepeat, once
-// per session. It is called when the dash's PXC session is up; without the repeat mode
-// it does nothing.
-func (s *PXCControl) StartAppStatusRepeat() {
+// per session, with the first one after firstDelay. It is called when the dash opens
+// CAR_DATA (the official app's moment), and a second later from the first heartbeat in
+// case this dash never opens CAR_DATA. Without the repeat mode it does nothing.
+func (s *PXCControl) StartAppStatusRepeat(firstDelay time.Duration) {
 	s.appStatus.mu.Lock()
 	on := s.appStatus.enabled && s.appStatus.repeatMode != 0
 	s.appStatus.mu.Unlock()
@@ -248,11 +258,44 @@ func (s *PXCControl) StartAppStatusRepeat() {
 	}
 	s.appStatus.repeatOnce.Do(func() {
 		s.wg.Add(1)
-		go s.runAppStatusRepeat()
+		go s.runAppStatusRepeat(firstDelay)
 	})
 }
 
-func (s *PXCControl) runAppStatusRepeat() {
+// appStatusConn is where the official Zontes app sends its P2C state: the CAR_DATA
+// connection, falling back to the control one on a dash that never names it.
+func (s *PXCControl) appStatusConn() net.Conn {
+	if conn := s.namedConn("CAR_DATA"); conn != nil {
+		return conn
+	}
+	return s.controlConn()
+}
+
+// namedConn is the open PXC connection the dash selected as name, or nil.
+func (s *PXCControl) namedConn(name string) net.Conn {
+	var found net.Conn
+	s.connections.Range(func(key, value any) bool {
+		state, ok := value.(*pxcConnectionState)
+		if !ok {
+			return true
+		}
+		if channel, _ := state.channel.Load().(string); channel == name {
+			found, _ = key.(net.Conn)
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// repeatingAppStatus says whether the official Zontes behaviour is on for this session.
+func (s *PXCControl) repeatingAppStatus() bool {
+	s.appStatus.mu.Lock()
+	defer s.appStatus.mu.Unlock()
+	return s.appStatus.enabled && s.appStatus.repeatMode != 0
+}
+
+func (s *PXCControl) runAppStatusRepeat(firstDelay time.Duration) {
 	defer s.wg.Done()
 
 	s.appStatus.mu.Lock()
@@ -261,6 +304,7 @@ func (s *PXCControl) runAppStatusRepeat() {
 	screen := s.appStatus.screen
 	every := s.appStatus.repeatEvery
 	s.appStatus.mu.Unlock()
+	screen.AOAHid = true
 	if every <= 0 {
 		every = appStatusRepeatEvery
 	}
@@ -275,15 +319,15 @@ func (s *PXCControl) runAppStatusRepeat() {
 		return
 	}
 
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
+	wait := firstDelay
 	for sent := 0; ; sent++ {
 		select {
 		case <-s.quit:
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
 		}
-		conn := s.controlConn()
+		wait = every
+		conn := s.appStatusConn()
 		if conn == nil {
 			logging.Printf("PXC app status: no open PXC connection to send mode=%d on", mode)
 			s.noteAppStatus(mode, fmt.Errorf("no open PXC connection"))
@@ -292,7 +336,8 @@ func (s *PXCControl) runAppStatusRepeat() {
 		err := s.writeResponse(&PXCResponse{Command: command, Body: body}, conn, nil)
 		// The first one and a failure are what a log needs; one line a second is noise.
 		if sent == 0 || err != nil {
-			logging.Printf("PXC app status: sent 0x%x mode=%d body=%s err=%v, repeating every %s", command, mode, body, err, every)
+			channel, _ := s.connectionState(conn).channel.Load().(string)
+			logging.Printf("PXC app status: sent 0x%x on %q mode=%d body=%s err=%v, repeating every %s", command, channel, mode, body, err, every)
 			s.noteAppStatus(mode, err)
 		}
 		if err != nil {

@@ -8,5 +8,6 @@ Removed from the snapshot: static/ (35 MB sample H.264, only read by cmd/hud-des
 Local change: hud/api BuildAnnexBAU / BuildAnnexBAUFromAVCC no longer prepend an AUD NAL
   (the official ZONTES EasyConn SDK sends none; the 368G painted nothing with it).
 Local change: hud/net SetAppStatusRepeat (+ core/api AppStatusRepeatMode, AppStatusForeground):
-  ECP_P2C_APPSTATUS_FOREGROUND (0x20020) every second from one second after the dash's first
-  PXC heartbeat, as the official ZONTES app's EcBridge FORCE_GROUND_CHECK does.
+  ECP_P2C_APPSTATUS_FOREGROUND (0x20020) on CAR_DATA ~130 ms after the dash opens it, then every
+  second, and CHECK_SN_RESULT on CAR_DATA, as the official ZONTES app does (timing and socket from
+  RideScreen AA, github.com/mgb1982/ridescreen-aa).

@@ -48,6 +48,8 @@ final class DashSession {
     private var pushedFrames = 0
     /// Log the first keyframe after each STREAM_START, so a field log shows what the dash got.
     private var logNextKeyFrame = true
+    /// The dash acks each per-second app state with 0x20021; only the first few are worth a line.
+    private var appStatusAcksLogged = 0
 
     init(profile: DashProfile, options: Options = .encoded, log: @escaping (String) -> Void) {
         self.profile = profile
@@ -303,6 +305,11 @@ final class DashSession {
             // Same number as TransportCmdAppStatusNotify: [mode, written].
             let bytes = [UInt8](payload)
             log("App status sent: mode=\(bytes.first.map(String.init) ?? "?") written=\(bytes.dropFirst().first.map(String.init) ?? "?") (repeats every 1 s)")
+        case (2, 0x20021):
+            appStatusAcksLogged += 1
+            if appStatusAcksLogged <= 3 {
+                log("Dash acknowledged the app state (0x20021): it knows the phone app is open.")
+            }
         case (2, _):
             // CLIENT_INFO in full: its mirrorMode and supportFunction decide what the official
             // app sends this dash.

@@ -16,11 +16,11 @@ struct DashProfile: Identifiable, Equatable {
     let clientVersionFingerprint: String
     let clientInfoSupportFunction: Bool
     let supportFunction: Int
-    /// Tell the dash the phone app's state the way the official ZONTES app does: from one second
-    /// after the dash connects, every second, ECP_P2C_APPSTATUS_FOREGROUND (0x20020) with this
-    /// mode. 2 is the official app's normal state (its own car screen, the Mapbox map); 1 is a
-    /// true mirror of the phone. 0 sends nothing. Without it the 368G pulls every frame and keeps
-    /// its pairing page up; told BACKGROUND (0x20030) mode 2 at connect, it dropped the link.
+    /// Tell the dash the phone app's state the way the official ZONTES app does:
+    /// ECP_P2C_APPSTATUS_FOREGROUND (0x20020) with this mode on the CAR_DATA socket ~130 ms after
+    /// the dash opens it, then every second, with CHECK_SN_RESULT on CAR_DATA too (RideScreen AA,
+    /// field-tested on Zontes). 2 is the official app's normal state (its own car screen); 1 a true
+    /// mirror. 0 sends nothing. Sent on CAR_CTRL instead (build 24), the 368G never acked it.
     var appStatusMode = 0
 
     // Shared by E, F and G.
@@ -53,7 +53,7 @@ struct DashProfile: Identifiable, Equatable {
     static let zontesH = DashProfile(
         id: "zontes_368g_h",
         title: "Zontes 368G (H) - ลองอันนี้ก่อน",
-        detail: "เหมือน G และบอกจอทุก 1 วินาทีว่าแอปเปิดอยู่ (0x20020 โหมด 2) แบบแอป ZONTES ทางการตอนแสดงแผนที่",
+        detail: "ตัวตนแอป ZONTES และบอกจอทุก 1 วินาทีว่าแอปเปิดอยู่ (0x20020) ทางช่อง CAR_DATA แบบแอปทางการ",
         clientPackage: "tayo.com.ZontesIntelligence",
         clientVersionCode: 3034,
         clientVersionFingerprint: "V:1.12(3034)--ONLINE",
@@ -62,16 +62,18 @@ struct DashProfile: Identifiable, Equatable {
         appStatusMode: 2
     )
 
+    /// RideScreen AA's identity (github.com/mgb1982/ridescreen-aa), which reports every Zontes 368
+    /// working: the CFMOTO app's package at versionCode 126, plus the same Zontes app state.
     static let zontesI = DashProfile(
         id: "zontes_368g_i",
-        title: "Zontes 368G (I) - ทดลอง",
-        detail: "เหมือน H แต่บอกจอว่าเป็นภาพ mirror หน้าจอโทรศัพท์ (0x20020 โหมด 1)",
-        clientPackage: "tayo.com.ZontesIntelligence",
-        clientVersionCode: 3034,
-        clientVersionFingerprint: "V:1.12(3034)--ONLINE",
+        title: "Zontes 368G (I) - แบบ RideScreen",
+        detail: "ตัวตนแอป CFMOTO แบบแอป RideScreen AA ที่ใช้กับ 368 ได้ และบอกจอว่าแอปเปิดอยู่ (0x20020)",
+        clientPackage: "com.cfmoto.cfmotointernational",
+        clientVersionCode: 126,
+        clientVersionFingerprint: "opencfmoto-poc",
         clientInfoSupportFunction: true,
         supportFunction: 128,
-        appStatusMode: 1
+        appStatusMode: 2
     )
 
     static let zontesF = DashProfile(

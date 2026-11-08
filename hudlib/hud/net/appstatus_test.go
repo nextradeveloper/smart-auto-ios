@@ -3,6 +3,7 @@ package net
 import (
 	"context"
 	"encoding/json"
+	stdnet "net"
 	"testing"
 	"time"
 )
@@ -170,8 +171,8 @@ func TestAppStatusRepeatSendsForegroundEveryPeriod(t *testing.T) {
 	_, server := openControlChannel(t, control)
 	control.SendAppStatus(AppStatusBackground) // the one-shot at CLIENT_INFO: must stay silent
 	control.SendAppStatus(AppStatusMirrorLive) // the one-shot at STREAM_START: same
-	control.StartAppStatusRepeat()
-	control.StartAppStatusRepeat() // a second heartbeat must not start a second loop
+	control.StartAppStatusRepeat(0)
+	control.StartAppStatusRepeat(0) // a second trigger must not start a second loop
 
 	for i := 0; i < 3; i++ {
 		got := readPXCResponse(t, server)
@@ -181,6 +182,11 @@ func TestAppStatusRepeatSendsForegroundEveryPeriod(t *testing.T) {
 		numbers := decodeNumbers(t, got.Body)
 		if numbers["mode"] != AppStatusBackground || numbers["width"] != 1080 || numbers["height"] != 2640 || numbers["displayRotation"] != 0 {
 			t.Fatalf("frame %d body = %s, want mode 2 upright 1080x2640", i, got.Body)
+		}
+		var flags map[string]any
+		_ = json.Unmarshal(got.Body, &flags)
+		if flags["enableAOAHid"] != true {
+			t.Fatalf("frame %d body = %s, want enableAOAHid true like the official Zontes app", i, got.Body)
 		}
 	}
 	if mode := <-reports; mode != AppStatusBackground {
@@ -203,7 +209,7 @@ func TestAppStatusRepeatNeedsTheNotificationOn(t *testing.T) {
 	control.appStatus.repeatEvery = time.Millisecond
 	_, server := openControlChannel(t, control)
 
-	control.StartAppStatusRepeat()
+	control.StartAppStatusRepeat(0)
 
 	if err := server.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
 		t.Fatal(err)
@@ -220,4 +226,38 @@ func stopControl(t *testing.T, control *PXCControl) {
 	if err := control.Stop(ctx); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
+}
+
+// On a Zontes dash both the app state and CHECK_SN_RESULT go on CAR_DATA, the official
+// app's P2C socket, even when the dash asked CHECK_SN on CAR_CTRL.
+func TestAppStatusRepeatAndCheckSnResultUseCarData(t *testing.T) {
+	control := NewPXCControl(":0", nil, nil)
+	control.SetAppStatusNotify(true)
+	control.SetAppStatusRepeat(AppStatusBackground, true)
+	control.appStatus.repeatEvery = time.Hour // only the first one matters here
+
+	ctrlClient, ctrlServer := openControlChannel(t, control)
+	dataClient, dataServer := stdnet.Pipe()
+	t.Cleanup(func() { _ = dataClient.Close(); _ = dataServer.Close() })
+	if err := dataServer.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	go control.handleEvent(&PXCResponse{Command: PxcChannelCarData}, dataClient)
+	if got := readPXCResponse(t, dataServer); got.Command != PxcChannelCarData+1 {
+		t.Fatalf("CAR_DATA reply = 0x%x", got.Command)
+	}
+	if got := readPXCResponse(t, dataServer); got.Command != PxcAppStatusForeground {
+		t.Fatalf("first frame on CAR_DATA = 0x%x, want FOREGROUND", got.Command)
+	}
+
+	go control.handleEvent(&PXCResponse{Command: PxcClientSet, Body: []byte(`{"client_set":"easy_conn","sn":"X"}`)}, ctrlClient)
+	if got := readPXCResponse(t, ctrlServer); got.Command != PxcCheckSnAck {
+		t.Fatalf("CHECK_SN ack on CAR_CTRL = 0x%x, want 0x%x", got.Command, PxcCheckSnAck)
+	}
+	if got := readPXCResponse(t, dataServer); got.Command != PxcCheckSnResult {
+		t.Fatalf("CHECK_SN_RESULT went elsewhere: CAR_DATA got 0x%x", got.Command)
+	}
+	_ = dataServer.Close()
+	_ = ctrlServer.Close()
+	stopControl(t, control)
 }

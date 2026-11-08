@@ -734,6 +734,9 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 			return
 		}
 		s.startChannelHeartbeat(conn, "CAR_DATA")
+		// The official Zontes app's first FOREGROUND goes out on this socket ~130 ms
+		// after the dash opens it, then every second. No-op without SetAppStatusRepeat.
+		s.StartAppStatusRepeat(appStatusFirstAfterCarData)
 	case PxcHudConf:
 		if s.HudConfig != nil {
 			break
@@ -804,8 +807,17 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 			break
 		}
 		response := &PXCResponse{Command: PxcCheckSnResult, Body: body}
-		if err := s.writeResponse(response, conn, nil); err != nil {
-			s.emitError(s.connectionError(conn, PxcWriteErr, err))
+		// The official Zontes app sends the result on CAR_DATA (its P2C socket), whichever
+		// socket the question came on; RideScreen AA found Zontes dashes only accept the
+		// session with both this and the app state there.
+		target := conn
+		if s.repeatingAppStatus() {
+			if data := s.namedConn("CAR_DATA"); data != nil {
+				target = data
+			}
+		}
+		if err := s.writeResponse(response, target, nil); err != nil {
+			s.emitError(s.connectionError(target, PxcWriteErr, err))
 		}
 	case PxcHeartbeat:
 		s.emitEvent(*event) // Necessary to indicate PXC finished
@@ -814,9 +826,12 @@ func (s *PXCControl) handleEvent(event *PXCResponse, conn net.Conn) {
 			s.emitError(s.connectionError(conn, PxcWriteErr, err))
 			break
 		}
-		// The session is up: the moment the official ZONTES app starts stating its
-		// foreground state every second. A no-op unless SetAppStatusRepeat asked for it.
-		s.StartAppStatusRepeat()
+		// Fallback for a dash that never opens CAR_DATA: start the official ZONTES app's
+		// per-second state a second after the session is up. A no-op unless
+		// SetAppStatusRepeat asked for it, or once CAR_DATA has started it.
+		if s.repeatingAppStatus() {
+			time.AfterFunc(appStatusRepeatEvery, func() { s.StartAppStatusRepeat(0) })
+		}
 	case PxcCheckSnDone:
 		// The bike acknowledges the phone-originated CHECK_SN_RESULT.
 		s.emitEvent(*event)

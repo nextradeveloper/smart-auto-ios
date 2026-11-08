@@ -98,3 +98,18 @@ official app use true mirror (mode 1).
 
 The iCarCast relay (CarPlay direct) is High profile, level 4.2, 60 fps, which the official app
 would never send this dash; it would need re-encoding to Baseline 3.1 to match.
+
+Field log 2026-11-08 (build 24): FOREGROUND mode 2 went out every second on CAR_CTRL; the 368G kept
+the session 40 s but never acked (no `0x20021`) and painted nothing. Its CLIENT_INFO: `mirrorMode`
+1, `productType` 3, `flavor` 65561, `screenType` 1, `sdkVersion` 0.9.29.1, channel 21334.
+
+RideScreen AA (github.com/mgb1982/ridescreen-aa, AGPL, a fork of open-cfmoto) reports the whole
+Zontes 368 range working. From its `PxcHandshake.kt`, field-tested on Zontes dashes: the official
+app sends `0x20020` (mode 2, enableAOAHid true, phone's portrait size) on the **CAR_DATA** socket
+~130 ms after the dash opens it, then every second, and sends CHECK_SN_RESULT on CAR_DATA too; the
+dash acks `0x20021`. It identifies as `com.cfmoto.cfmotointernational` versionCode 126 and
+answers each frame pull with `u32 LE length + Annex-B`, Baseline 3.1, IDR every second.
+
+hudlib now routes both to CAR_DATA (`appStatusConn`, `namedConn`). Profile H keeps the ZONTES
+identity; profile I uses RideScreen's.
+
