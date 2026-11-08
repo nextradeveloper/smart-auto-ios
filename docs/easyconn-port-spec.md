@@ -113,3 +113,9 @@ answers each frame pull with `u32 LE length + Annex-B`, Baseline 3.1, IDR every 
 hudlib now routes both to CAR_DATA (`appStatusConn`, `namedConn`). Profile H keeps the ZONTES
 identity; profile I uses RideScreen's.
 
+
+Field log 2026-11-08 (build 25): screen share paints on the 368G with profile H. The dash acks
+`0x201C1` (CHECK_SN_RESULT on CAR_DATA) and `0x20021` every second. CarPlay direct could not reach
+iCarCast in that log at all (its "This iPhone" server was not running). The relay now applies the
+same NAL header rewrite as screen share; its picture is still iCarCast's High-profile H.264, and
+this app cannot re-encode it while in the background.

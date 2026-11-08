@@ -248,21 +248,18 @@ final class ICarCastStream: NSObject, URLSessionDelegate {
         }
         guard hasIDR || hasSlice else { return } // parameter sets only: cached above
 
+        // Same NAL headers as screen share, which the 368G paints (Shared/H264NAL.swift); SEI and
+        // AUDs are dropped there too.
         var accessUnit = Data()
         if hasIDR, !hasSPS, let sps, let pps {
-            accessUnit.append(contentsOf: Self.startCode)
-            accessUnit.append(sps)
-            accessUnit.append(contentsOf: Self.startCode)
-            accessUnit.append(pps)
+            H264NAL.appendAnnexB(sps, to: &accessUnit)
+            H264NAL.appendAnnexB(pps, to: &accessUnit)
         }
-        for nal in nals where nal.type != 31 && nal.type != 9 {
-            accessUnit.append(contentsOf: Self.startCode)
-            accessUnit.append(contentsOf: bytes[nal.range])
+        for nal in nals where nal.type != 31 {
+            H264NAL.appendAnnexB(Data(bytes[nal.range]), to: &accessUnit)
         }
         onAccessUnit?(accessUnit, hasIDR)
     }
-
-    private static let startCode: [UInt8] = [0, 0, 0, 1]
 
     struct NAL {
         let type: UInt8
