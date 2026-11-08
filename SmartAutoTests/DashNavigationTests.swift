@@ -1,4 +1,5 @@
 import CoreLocation
+import MapKit
 import XCTest
 @testable import SmartAuto
 
@@ -123,6 +124,38 @@ extension DashNavigationTests {
             heading = motion.step(latest: parked, compass: CompassSample(heading: 300, time: now), now: now).1
         }
         XCTAssertEqual(heading ?? -1, 30, accuracy: 1)
+    }
+
+    /// Spoken distances read the way Thai voices say them.
+    func testSpokenDistance() {
+        XCTAssertEqual(DashVoice.spokenDistance(230), "250 เมตร")
+        XCTAssertEqual(DashVoice.spokenDistance(20), "50 เมตร")
+        XCTAssertEqual(DashVoice.spokenDistance(1000), "1 กิโลเมตร")
+        XCTAssertEqual(DashVoice.spokenDistance(1460), "1.5 กิโลเมตร")
+    }
+
+    /// At 36 km/h a turn is said 1 km ahead, again within 180 m, and at it.
+    func testVoiceStages() {
+        XCTAssertTrue(DashVoice.stages(distance: 900, speed: 10).early)
+        XCTAssertTrue(DashVoice.stages(distance: 150, speed: 10).prepare)
+        XCTAssertTrue(DashVoice.stages(distance: 20, speed: 10).now)
+        let between = DashVoice.stages(distance: 300, speed: 10)
+        XCTAssertFalse(between.early || between.prepare || between.now)
+        // Fast, the warning comes earlier: 12 s at 100 km/h is about 333 m.
+        XCTAssertTrue(DashVoice.stages(distance: 320, speed: 27.8).prepare)
+    }
+
+    /// Saved map tiles sit on a fixed grid: a tile covers itself only, and the level fits the scale.
+    func testTileGrid() {
+        let latitude = 13.75
+        let level = DashTiles.level(metersPerPixel: 1.25, latitude: latitude)
+        let key = DashTiles.Key(dark: true, level: level, x: 3000, y: 2000)
+        XCTAssertEqual(DashTiles.keys(covering: DashTiles.rect(key), level: level, dark: true), [key])
+        let metersPerPixel = DashTiles.width(level) / MKMapPointsPerMeterAtLatitude(latitude) / Double(DashTiles.pixels)
+        XCTAssertEqual(metersPerPixel, 1.25, accuracy: 1.25 * 0.1)
+        let around = DashTiles.keys(around: MKMapPoint(x: DashTiles.rect(key).midX, y: DashTiles.rect(key).midY),
+                                    radius: DashTiles.width(level), level: level, dark: true)
+        XCTAssertEqual(around.first, key)
     }
 }
 

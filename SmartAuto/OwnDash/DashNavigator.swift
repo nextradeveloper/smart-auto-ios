@@ -33,8 +33,44 @@ struct DashDestination: Codable, Hashable, Identifiable {
     }
 }
 
-/// Turn-by-turn guidance from Apple's routes: progress along the route, rerouting when we leave
-/// it, arrival. Fed raw location fixes by DashScreenService.
+/// One way to ride the trip: a route per leg (to each stop, then the destination).
+struct DashTrip: Identifiable {
+    let id = UUID()
+    let legs: [MKRoute]
+
+    var distance: Double { legs.reduce(0) { $0 + $1.distance } }
+    var expectedTravelTime: TimeInterval { legs.reduce(0) { $0 + $1.expectedTravelTime } }
+    var hasTolls: Bool { legs.contains { $0.hasTolls } }
+    var hasHighways: Bool { legs.contains { $0.hasHighways } }
+    var turns: Int { legs.reduce(0) { $0 + $1.steps.count } }
+    /// Apple's name for the way it goes ("ทล.1"); for one leg only.
+    var name: String { legs.count == 1 ? legs[0].name : "" }
+
+    /// What sets this one apart from the others, from Apple's own route data, as Apple Maps labels
+    /// its choices: fastest, or how much slower, and no highways, no expressway, fewer turns, shorter.
+    static func labels(for trip: DashTrip, among trips: [DashTrip]) -> [String] {
+        guard let fastest = trips.min(by: { $0.expectedTravelTime < $1.expectedTravelTime }) else { return [] }
+        var labels: [String] = []
+        if trip.id == fastest.id {
+            labels.append("เร็วที่สุด")
+        } else {
+            let minutes = Int(((trip.expectedTravelTime - fastest.expectedTravelTime) / 60).rounded())
+            if minutes > 0 { labels.append("+\(minutes) นาที") }
+        }
+        guard trips.count > 1 else { return labels }
+        if !trip.hasHighways && trips.contains(where: \.hasHighways) { labels.append("เลี่ยงทางหลวง") }
+        if !trip.hasTolls && trips.contains(where: \.hasTolls) { labels.append("ไม่มีทางด่วน") }
+        let others = trips.filter { $0.id != trip.id }
+        if let fewest = others.map(\.turns).min(), trip.turns < fewest { labels.append("ทางเลี้ยวน้อยกว่า") }
+        if trip.id != fastest.id, let shortest = others.map(\.distance).min(), trip.distance < shortest - 500 {
+            labels.append("ระยะทางสั้นกว่า")
+        }
+        return labels
+    }
+}
+
+/// Turn-by-turn guidance from Apple's routes: progress along the route, stops on the way,
+/// rerouting when we leave it, arrival. Fed raw location fixes by DashScreenService.
 @MainActor
 final class DashNavigator: ObservableObject {
     enum Status: Equatable {
@@ -43,9 +79,13 @@ final class DashNavigator: ObservableObject {
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var destination: DashDestination?
+    /// Stops still ahead, in order.
+    @Published private(set) var stops: [DashDestination] = []
     @Published private(set) var route: DashRoute?
     @Published private(set) var progress: DashRouteProgress?
     @Published private(set) var recents: [DashDestination] = RecentDestinations.load()
+    /// Stops reached since guidance started, for the voice.
+    private(set) var stopsReached = 0
 
     /// A new route (first or after rerouting), so maps along it can be prepared.
     var onRoute: (@MainActor (DashRoute) -> Void)?
@@ -53,6 +93,7 @@ final class DashNavigator: ObservableObject {
     private var offRouteSince: Date?
     private var lastReroute = Date.distantPast
     private var arrivedAt: Date?
+    private var lastLocation: CLLocation?
 
     private func log(_ text: String) {
         EventLog.record("NAV", text)
@@ -60,26 +101,50 @@ final class DashNavigator: ObservableObject {
 
     var isNavigating: Bool { status != .idle }
 
-    /// Asks Apple for a route by road from `origin` (or the current location) to `destination`.
-    static func route(to destination: DashDestination, from origin: CLLocation?) async throws -> MKRoute {
+    private static func request(from origin: MKMapItem, to destination: MKMapItem) -> MKDirections.Request {
         let request = MKDirections.Request()
-        if let origin {
-            request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin.coordinate))
-        } else {
-            request.source = MKMapItem.forCurrentLocation()
-        }
-        request.destination = destination.mapItem
+        request.source = origin
+        request.destination = destination
         request.transportType = .automobile
         request.highwayPreference = DashSettings.avoidHighways ? .avoid : .any
         request.tollPreference = DashSettings.avoidTolls ? .avoid : .any
-        let response = try await MKDirections(request: request).calculate()
-        guard let route = response.routes.first else { throw ZontesError.message("ไม่พบเส้นทางไปยังจุดหมายนี้") }
-        return route
+        return request
     }
 
-    func start(_ destination: DashDestination, route: MKRoute) {
+    private static func origin(_ location: CLLocation?) -> MKMapItem {
+        location.map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? MKMapItem.forCurrentLocation()
+    }
+
+    /// Apple's ways by road from `origin` (or the current location) to `destination`, fastest first,
+    /// up to three.
+    static func routes(to destination: DashDestination, from origin: CLLocation?) async throws -> [MKRoute] {
+        let request = Self.request(from: Self.origin(origin), to: destination.mapItem)
+        request.requestsAlternateRoutes = true
+        let routes = try await MKDirections(request: request).calculate().routes
+            .sorted { $0.expectedTravelTime < $1.expectedTravelTime }
+        guard !routes.isEmpty else { throw ZontesError.message("ไม่พบเส้นทางไปยังจุดหมายนี้") }
+        return Array(routes.prefix(3))
+    }
+
+    /// One route per leg: `origin` to the first place, then on to each next one. Apple routes one
+    /// leg at a time, so stops are routed leg by leg, as Apple Maps does.
+    static func legs(through places: [DashDestination], from origin: CLLocation?) async throws -> [MKRoute] {
+        var legs: [MKRoute] = []
+        var from = Self.origin(origin)
+        for place in places {
+            let response = try await MKDirections(request: Self.request(from: from, to: place.mapItem)).calculate()
+            guard let leg = response.routes.first else { throw ZontesError.message("ไม่พบเส้นทางไป \(place.name)") }
+            legs.append(leg)
+            from = place.mapItem
+        }
+        return legs
+    }
+
+    func start(_ destination: DashDestination, stops: [DashDestination], legs: [MKRoute]) {
         self.destination = destination
-        let built = DashRoute(route)
+        self.stops = stops
+        stopsReached = 0
+        let built = DashRoute(legs: legs)
         self.route = built
         progress = nil
         offRouteSince = nil
@@ -87,8 +152,9 @@ final class DashNavigator: ObservableObject {
         status = .guiding
         RecentDestinations.add(destination)
         recents = RecentDestinations.load()
-        log("Guidance to \"\(destination.name)\": \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min, " +
-            "\(built.steps.count) steps, avoid highways \(DashSettings.avoidHighways), tolls \(DashSettings.avoidTolls).")
+        log("Guidance to \"\(destination.name)\" with \(stops.count) stops: \(Int(built.distance)) m, " +
+            "\(Int(built.expectedTravelTime / 60)) min, \(built.steps.count) steps, avoid highways " +
+            "\(DashSettings.avoidHighways), tolls \(DashSettings.avoidTolls).")
         onRoute?(built)
     }
 
@@ -96,11 +162,29 @@ final class DashNavigator: ObservableObject {
         if status != .idle { log("Guidance ended.") }
         status = .idle
         destination = nil
+        stops = []
         route = nil
         progress = nil
     }
 
+    /// A stop before the others (a fuel station on the way, say); the route is made again through it.
+    func addStop(_ place: DashDestination) {
+        guard status != .idle else { return }
+        stops.insert(place, at: 0)
+        log("Stop added: \"\(place.name)\".")
+        reroute("stop added")
+    }
+
+    /// Leaves out the next stop and goes on to the one after (or the destination).
+    func skipStop() {
+        guard status != .idle, !stops.isEmpty else { return }
+        let skipped = stops.removeFirst()
+        log("Stop skipped: \"\(skipped.name)\".")
+        reroute("stop skipped")
+    }
+
     func update(with location: CLLocation) {
+        lastLocation = location
         guard let route, let destination, status != .idle else { return }
         let progress = route.progress(at: location.coordinate, hint: self.progress?.segment)
         self.progress = progress
@@ -108,6 +192,15 @@ final class DashNavigator: ObservableObject {
         if status == .arrived {
             if let arrivedAt, Date().timeIntervalSince(arrivedAt) > 20 { stop() }
             return
+        }
+        // Past the next stop (or close to it): on to the next leg.
+        let legIndex = route.legEnds.count - 1 - stops.count
+        if let next = stops.first, legIndex >= 0, legIndex < route.legEnds.count - 1,
+           progress.distanceAlong >= route.legEnds[legIndex] - 30
+            || DashRoute.meters(location.coordinate, next.coordinate) < 40 {
+            stops.removeFirst()
+            stopsReached += 1
+            log("Reached stop \"\(next.name)\".")
         }
         if progress.remainingDistance < 30 || DashRoute.meters(location.coordinate, destination.coordinate) < 25 {
             status = .arrived
@@ -121,22 +214,26 @@ final class DashNavigator: ObservableObject {
             if offRouteSince == nil { offRouteSince = Date() }
             if let since = offRouteSince, Date().timeIntervalSince(since) >= 5, status != .rerouting,
                Date().timeIntervalSince(lastReroute) > 10 {
-                reroute(from: location, to: destination)
+                reroute("off the route by \(Int(progress.offRoute)) m")
             }
         } else {
             offRouteSince = nil
         }
     }
 
-    private func reroute(from location: CLLocation, to destination: DashDestination) {
+    /// A new route from here through the stops still ahead.
+    private func reroute(_ reason: String) {
+        guard let destination else { return }
         status = .rerouting
         lastReroute = Date()
-        log("Off the route by \(Int(progress?.offRoute ?? 0)) m; rerouting.")
+        log("Rerouting: \(reason).")
+        let places = stops + [destination]
+        let location = lastLocation
         Task {
             do {
-                let route = try await Self.route(to: destination, from: location)
+                let legs = try await Self.legs(through: places, from: location)
                 guard self.destination == destination, self.status != .idle else { return }
-                let built = DashRoute(route)
+                let built = DashRoute(legs: legs)
                 self.route = built
                 self.progress = nil
                 self.offRouteSince = nil
@@ -166,6 +263,11 @@ final class DashNavigator: ObservableObject {
         default:
             if let text = step?.instruction, !text.isEmpty { instruction = text } else { instruction = "ตรงไป" }
         }
+        var then: DashManeuver?
+        if status == .guiding, let next = progress.nextStep, next + 1 < route.steps.count,
+           route.steps[next + 1].startDistance - route.steps[next].startDistance < 150 {
+            then = route.steps[next + 1].maneuver
+        }
         return DashScene.Navigation(
             maneuver: status == .arrived ? .arrive : (step?.maneuver ?? .arrive),
             distanceToManeuver: status == .arrived ? nil : progress.distanceToNextStep,
@@ -175,7 +277,8 @@ final class DashNavigator: ObservableObject {
             remainingTime: progress.remainingTime,
             upcoming: route.upcoming(from: progress.distanceAlong, length: 3000),
             status: status,
-            destinationName: destination.name
+            destinationName: destination.name,
+            then: then
         )
     }
 }

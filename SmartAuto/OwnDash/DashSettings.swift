@@ -21,6 +21,16 @@ enum DashSettings {
     static let avoidTollsKey = "dash.avoidTolls"
     static let zoomKey = "dash.zoom"
     static let threeDKey = "dash.threeD"
+    static let autoConnectKey = "dash.autoConnect"
+    static let voiceKey = "dash.voice"
+    static let mapOnRightKey = "dash.mapOnRight"
+
+    /// Turn the dash screen on and off by itself, like RideScreen; on unless turned off.
+    static var autoConnect: Bool { UserDefaults.standard.object(forKey: autoConnectKey) as? Bool ?? true }
+    /// Spoken turn-by-turn; on unless turned off.
+    static var voice: Bool { UserDefaults.standard.object(forKey: voiceKey) as? Bool ?? true }
+    /// The dash laid out mirrored: map on the right, cards on the left (and the reverse in guidance).
+    static var mapOnRight: Bool { UserDefaults.standard.bool(forKey: mapOnRightKey) }
 
     /// Guidance map tilted like Apple Maps' 3D driving view (dash and phone); on unless turned off.
     static var threeD: Bool { UserDefaults.standard.object(forKey: threeDKey) as? Bool ?? true }
@@ -47,7 +57,9 @@ enum DashSettings {
     }
 
     static var avoidHighways: Bool { UserDefaults.standard.bool(forKey: avoidHighwaysKey) }
-    static var avoidTolls: Bool { UserDefaults.standard.bool(forKey: avoidTollsKey) }
+    /// Motorcycles may not use Thailand's expressways or motorways, which are the toll roads; so
+    /// avoided unless turned off.
+    static var avoidTolls: Bool { UserDefaults.standard.object(forKey: avoidTollsKey) as? Bool ?? true }
 
     /// The style to draw now. "ตามโทรศัพท์" follows the iPhone's own light or dark appearance.
     @MainActor

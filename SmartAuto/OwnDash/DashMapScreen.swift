@@ -12,6 +12,7 @@ struct DashMapScreen: View {
     @AppStorage(DashSettings.themeKey) private var theme = DashSettings.Theme.dark.rawValue
     @AppStorage(DashSettings.zoomKey) private var dashZoom = 1.0
     @AppStorage(DashSettings.threeDKey) private var threeD = true
+    @AppStorage(DashSettings.mapOnRightKey) private var mapOnRight = false
     @State private var recenter = 0
     @State private var chosen: DashDestination?
 
@@ -26,6 +27,7 @@ struct DashMapScreen: View {
                 VStack(alignment: .leading) {
                     if navigator.isNavigating {
                         DashGuidanceBanner(navigator: navigator)
+                            .environment(\.layoutDirection, .leftToRight)
                             .padding(16)
                             .frame(width: 340, alignment: .leading)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -39,6 +41,7 @@ struct DashMapScreen: View {
                 VStack(alignment: .trailing, spacing: 12) {
                     HStack(spacing: 10) {
                         timePill
+                            .environment(\.layoutDirection, .leftToRight)
                         MapButton(symbol: "xmark") { dismiss() }
                     }
                     Spacer(minLength: 8)
@@ -52,6 +55,8 @@ struct DashMapScreen: View {
                     }
                 }
             }
+            // Mirrored like the dash when its map is on the right; the cards themselves stay as they are.
+            .environment(\.layoutDirection, mapOnRight ? .rightToLeft : .leftToRight)
             .padding(12)
         }
         .preferredColorScheme(isDark ? .dark : .light)

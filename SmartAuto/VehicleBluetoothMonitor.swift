@@ -113,6 +113,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     enum Event { case connected, locked, unlocked, disconnected }
     /// Called directly, not through SwiftUI, so it also runs while the app is in the background.
     var onEvent: (@MainActor (Event) -> Void)?
+    /// The link to the bike came up (true) or went down; for the dash screen's auto connect.
+    var onLinkChange: (@MainActor (Bool) -> Void)?
     private var proximityTimer: Timer?
     private var smoothedRSSI: Double?
     private let serviceID = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -429,7 +431,7 @@ extension VehicleBluetoothMonitor: CBCentralManagerDelegate {
             guard let self, self.peripheral === peripheral else { return }
             let wasConnected = self.status.isPositive
             self.disconnect(); self.status = .ready
-            if wasConnected { self.onEvent?(.disconnected) }
+            if wasConnected { self.onEvent?(.disconnected); self.onLinkChange?(false) }
         }
     }
 }
@@ -458,6 +460,7 @@ extension VehicleBluetoothMonitor: CBPeripheralDelegate {
             guard error == nil, characteristic.isNotifying, self.writer != nil else { self.disconnect(); self.status = .ready; return }
             self.status = .connected(peripheral.name ?? "ZONTES")
             self.onEvent?(.connected)
+            self.onLinkChange?(true)
             self.enqueue(Data("*BT,\(self.pke),10,001,7#".utf8))
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.readBattery() }
         }

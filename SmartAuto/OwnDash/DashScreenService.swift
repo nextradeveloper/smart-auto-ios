@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import MapKit
+import Network
 import UIKit
 
 /// Smart Auto's own screen on the dash: drawn here, encoded on the CPU, kept going behind the lock
@@ -29,6 +30,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     let navigator = DashNavigator()
     let maps = DashMapProvider()
+    private let voice = DashVoice()
 
     /// Bike state for the ride card; polled once a second while running.
     var vehicleSource: (@MainActor () -> DashScene.Vehicle)?
@@ -43,6 +45,15 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     private var loop: DashFrameLoop?
     private var statusTimer: Timer?
     private var observers: [NSObjectProtocol] = []
+
+    // Auto connect.
+    private var pathMonitor: NWPathMonitor?
+    private var onDashWifi = false
+    private var bikeConnected = false
+    /// Turned off by hand at the bike: not again until it is left (Wi-Fi or Bluetooth gone).
+    private var autoSuppressed = false
+    private var autoStopTask: Task<Void, Never>?
+    private var autoGiveUpTask: Task<Void, Never>?
 
     override init() {
         super.init()
@@ -96,7 +107,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         refreshScene()
         updatePreview()
         if let known = lastKnownLocation {
-            maps.showSaved(for: known)
+            maps.update(for: known)
         }
         loop.start()
         dash.start()
@@ -107,9 +118,15 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         }
     }
 
-    func stop() {
+    /// `byUser`: the rider pressed ปิด, so auto connect leaves it off until they leave the bike.
+    func stop(byUser: Bool = true, reason: String = "by the user") {
         guard isRunning else { return }
-        log("Dash screen stopped by the user after \(dash?.framesPushed ?? 0) frames.")
+        log("Dash screen stopped \(reason) after \(dash?.framesPushed ?? 0) frames.")
+        if byUser { autoSuppressed = onDashWifi || bikeConnected }
+        autoStopTask?.cancel()
+        autoStopTask = nil
+        autoGiveUpTask?.cancel()
+        autoGiveUpTask = nil
         statusTimer?.invalidate()
         statusTimer = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -161,8 +178,8 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     // MARK: Guidance
 
     /// Starts guidance, and the dash screen with it if it is not on yet.
-    func startNavigation(to destination: DashDestination, route: MKRoute) {
-        navigator.start(destination, route: route)
+    func startNavigation(to destination: DashDestination, stops: [DashDestination] = [], legs: [MKRoute]) {
+        navigator.start(destination, stops: stops, legs: legs)
         maps.set(mode: .guidance)
         if !isRunning { start() }
         if let lastLocation { maps.update(for: lastLocation) }
@@ -174,6 +191,99 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.set(mode: .overview)
         if let lastLocation { maps.update(for: lastLocation) }
         refreshScene()
+    }
+
+    // MARK: Auto connect
+
+    /// Like RideScreen: the dash screen turns on by itself when the phone joins the dash's Wi-Fi
+    /// (192.168.3.x) or the bike's Bluetooth connects, and off a minute after both are gone, unless
+    /// guiding (then it waits for the bike to come back). Call once at launch.
+    func startAutoConnect() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+        monitor.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor in self?.wifiChanged() }
+        }
+        monitor.start(queue: DispatchQueue(label: "smartauto.dash.wifi"))
+        pathMonitor = monitor
+        _ = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                                   object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.wifiChanged() }
+        }
+    }
+
+    /// The switch in the app was turned on or off.
+    func autoConnectChanged() {
+        if DashSettings.autoConnect {
+            autoSuppressed = false
+            if onDashWifi || bikeConnected { autoStart(onDashWifi ? "dash Wi-Fi" : "bike Bluetooth") }
+        } else {
+            autoStopTask?.cancel()
+            autoStopTask = nil
+            autoGiveUpTask?.cancel()
+            autoGiveUpTask = nil
+        }
+    }
+
+    /// The bike's Bluetooth link came up or went down.
+    func bikeLink(_ up: Bool) {
+        guard up != bikeConnected else { return }
+        bikeConnected = up
+        if up {
+            autoStart("bike Bluetooth")
+        } else {
+            if !onDashWifi { autoSuppressed = false }
+            scheduleAutoStop("bike Bluetooth off")
+        }
+    }
+
+    static func isDashWifi() -> Bool {
+        guard let (address, _) = DashLocator.wifiIPv4() else { return false }
+        return address >> 8 == 0xC0A803 // 192.168.3.x, the dash's own access point
+    }
+
+    private func wifiChanged() {
+        let now = Self.isDashWifi()
+        if now != onDashWifi {
+            onDashWifi = now
+            log(now ? "Phone joined the dash Wi-Fi (\(DashLocator.wifiAddressDescription()))." : "Phone left the dash Wi-Fi.")
+            if !now {
+                if !bikeConnected { autoSuppressed = false }
+                scheduleAutoStop("dash Wi-Fi gone")
+            }
+        }
+        if now { autoStart("dash Wi-Fi") }
+    }
+
+    private func autoStart(_ reason: String) {
+        guard DashSettings.autoConnect else { return }
+        autoStopTask?.cancel()
+        autoStopTask = nil
+        guard !isRunning, !autoSuppressed else { return }
+        let where_ = UIApplication.shared.applicationState == .active ? "in front" : "in background"
+        log("Auto connect: starting the dash screen (\(reason)); app \(where_), " +
+            "location authorization \(locationManager.authorizationStatus.rawValue).")
+        start()
+        autoGiveUpTask?.cancel()
+        autoGiveUpTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.autoGiveUpTask = nil
+            if self.isRunning, self.state != .streaming, !self.onDashWifi, !self.navigator.isNavigating {
+                self.stop(byUser: false, reason: "by auto connect (no dash in 2 minutes)")
+            }
+        }
+    }
+
+    private func scheduleAutoStop(_ reason: String) {
+        guard DashSettings.autoConnect, isRunning, autoStopTask == nil else { return }
+        autoStopTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.autoStopTask = nil
+            guard self.isRunning, !self.onDashWifi, !self.bikeConnected, !self.navigator.isNavigating else { return }
+            self.stop(byUser: false, reason: "by auto connect (\(reason))")
+        }
     }
 
     // MARK: State
@@ -201,6 +311,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         let zoom = DashSettings.zoom
         store.set(zoom: zoom)
         store.set(threeD: DashSettings.threeD)
+        store.set(mapOnRight: DashSettings.mapOnRight)
         maps.set(zoom: zoom)
         let vehicle = vehicleSource?() ?? DashScene.Vehicle()
         if vehicle != self.vehicle { self.vehicle = vehicle }
@@ -238,8 +349,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         store.set(location: location)
         navigator.update(with: location)
         maps.set(mode: navigator.isNavigating ? .guidance : .overview)
-        maps.showSaved(for: location)
         maps.update(for: location)
+        voice.update(status: navigator.status, progress: navigator.progress, route: navigator.route,
+                     speed: location.speed, stopsReached: navigator.stopsReached)
         store.set(navigation: navigator.sceneNavigation())
     }
 
@@ -300,6 +412,8 @@ final class DashFrameLoop {
 
     // Render queue only.
     private var motion = DashMotion()
+    private var tickCount = 0
+    private var thermal = ProcessInfo.ThermalState.nominal
     private var frameIndex = 0
     private var lastKeyFrame = 0
     private var failures = 0
@@ -344,6 +458,18 @@ final class DashFrameLoop {
     }
 
     private func tick() {
+        // A phone in a mount in the sun gets hot (a common CarPlay and Android Auto complaint), and
+        // iOS slows it down or stops the app. Hot: 10 fps; very hot: about 7.
+        tickCount += 1
+        if tickCount % Self.frameRate == 0 {
+            let state = ProcessInfo.processInfo.thermalState
+            if state != thermal {
+                thermal = state
+                log("Phone is \(Self.thermalName(state)): dash at \(Self.frameRate / framesDivisor) fps.")
+            }
+        }
+        if tickCount % framesDivisor != 0 { return }
+
         lock.lock()
         var keyFrame = keyFrameRequested
         keyFrameRequested = false
@@ -385,6 +511,14 @@ final class DashFrameLoop {
             statEncodeNanos = 0
             statBytes = 0
             statStart = done
+        }
+    }
+
+    private var framesDivisor: Int {
+        switch thermal {
+        case .serious: return 2
+        case .critical: return 3
+        default: return 1
         }
     }
 

@@ -57,6 +57,7 @@ targets:
         UIBackgroundModes:
           - location
           - bluetooth-central
+          - audio
         NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อแสดงแผนที่และความเร็วบนจอรถ จำจุดจอดรถ และนำทางกลับไปหารถ รวมถึงทำงานต่อขณะล็อกโทรศัพท์
         NSLocationAlwaysAndWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถเมื่อคุณเดินออกห่างจากรถ แม้ไม่ได้เปิดแอป
         NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อสั่งงานรถ ZONTES และช่วยหารถเมื่ออยู่ใกล้

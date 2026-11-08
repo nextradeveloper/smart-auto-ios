@@ -67,6 +67,8 @@ final class DashRenderer {
     /// The palette of the frame being drawn.
     private var colors = Colors.dark
     private var style: DashStyle = .dark
+    /// Map on the right: every card and the puck swap sides.
+    private var mirrored = false
 
     private enum Layout {
         static let margin: CGFloat = 16
@@ -134,6 +136,7 @@ final class DashRenderer {
 
     func draw(_ scene: DashScene, in context: CGContext) {
         style = scene.style
+        mirrored = scene.mapOnRight
         colors = scene.style == .light ? .light : .dark
         context.saveGState()
         // Lay out top-left first, like UIKit; text and images flip back locally.
@@ -164,9 +167,15 @@ final class DashRenderer {
         let clockCard = CGRect(x: column.minX, y: column.minY, width: column.width, height: cardHeight)
         let rideCard = CGRect(x: column.minX, y: clockCard.maxY + Layout.gap, width: column.width, height: cardHeight)
 
-        drawOverviewMap(scene, in: mapPane, context: context)
-        drawClockCard(scene, in: clockCard, context: context)
-        drawRideCard(scene, in: rideCard, context: context)
+        drawOverviewMap(scene, in: side(mapPane), context: context)
+        drawClockCard(scene, in: side(clockCard), context: context)
+        drawRideCard(scene, in: side(rideCard), context: context)
+    }
+
+    /// `rect` laid out for a map on the left, moved to the other side when mirrored.
+    private func side(_ rect: CGRect) -> CGRect {
+        guard mirrored else { return rect }
+        return CGRect(x: size.width - rect.maxX, y: rect.minY, width: rect.width, height: rect.height)
     }
 
     private func drawOverviewMap(_ scene: DashScene, in pane: CGRect, context: CGContext) {
@@ -260,7 +269,7 @@ final class DashRenderer {
     private func drawGuidance(_ scene: DashScene, _ navigation: DashScene.Navigation, context: CGContext) {
         context.setFillColor(colors.emptyMap)
         context.fill(CGRect(origin: .zero, size: size))
-        let puck = Layout.guidancePuck
+        let puck = side(CGRect(origin: Layout.guidancePuck, size: .zero)).origin
 
         if scene.threeD, let position = scene.position ?? scene.location?.coordinate, let planar {
             drawPerspective(scene, navigation, at: position, planar: planar, context: context)
@@ -286,6 +295,7 @@ final class DashRenderer {
         }
 
         drawManeuverCard(navigation, context: context)
+        drawThenPill(navigation, context: context)
         drawArrivalCard(navigation, context: context)
         drawTimePill(scene, context: context)
         drawSpeedPill(scene, context: context)
@@ -377,7 +387,7 @@ final class DashRenderer {
     }
 
     private func drawManeuverCard(_ navigation: DashScene.Navigation, context: CGContext) {
-        let rect = CGRect(x: Layout.margin, y: Layout.margin, width: Layout.guidanceCardWidth, height: 196)
+        let rect = side(CGRect(x: Layout.margin, y: Layout.margin, width: Layout.guidanceCardWidth, height: 196))
         drawCard(rect, color: colors.cardOverMap, context: context)
         let left = rect.minX + 26
         let maxWidth = rect.width - 52
@@ -407,9 +417,24 @@ final class DashRenderer {
                  at: CGPoint(x: left, y: rect.minY + 160), maxWidth: maxWidth, context: context)
     }
 
+    /// "จากนั้น" and the turn after next, under the turn card, when the two come close together,
+    /// as CarPlay shows it.
+    private func drawThenPill(_ navigation: DashScene.Navigation, context: CGContext) {
+        guard navigation.status == .guiding, let then = navigation.then,
+              let image = symbols[Self.symbolKey(then.symbol, style)] else { return }
+        let rect = side(CGRect(x: Layout.margin, y: Layout.margin + 196 + 10, width: 200, height: 60))
+        drawCard(rect, color: colors.cardOverMap, radius: 30, context: context)
+        drawText("จากนั้น", font: bodyFont, color: colors.secondary,
+                 at: CGPoint(x: rect.minX + 24, y: rect.minY + 39), context: context)
+        let fit = min(40 / CGFloat(image.width), 40 / CGFloat(image.height))
+        let width = CGFloat(image.width) * fit, height = CGFloat(image.height) * fit
+        drawImage(image, in: CGRect(x: rect.maxX - 24 - width, y: rect.midY - height / 2, width: width, height: height),
+                  context: context)
+    }
+
     private func drawArrivalCard(_ navigation: DashScene.Navigation, context: CGContext) {
-        let rect = CGRect(x: Layout.margin, y: size.height - Layout.margin - 100,
-                          width: Layout.guidanceCardWidth, height: 100)
+        let rect = side(CGRect(x: Layout.margin, y: size.height - Layout.margin - 100,
+                               width: Layout.guidanceCardWidth, height: 100))
         drawCard(rect, color: colors.cardOverMap, context: context)
         var columns: [(String, String)] = []
         if let arrival = navigation.arrival { columns.append((timeFormatter.string(from: arrival), "ถึง")) }
@@ -430,7 +455,7 @@ final class DashRenderer {
     }
 
     private func drawTimePill(_ scene: DashScene, context: CGContext) {
-        let rect = CGRect(x: size.width - Layout.margin - 176, y: Layout.margin, width: 176, height: 58)
+        let rect = side(CGRect(x: size.width - Layout.margin - 176, y: Layout.margin, width: 176, height: 58))
         drawCard(rect, color: colors.cardOverMap, radius: 29, context: context)
         let time = timeFormatter.string(from: scene.date)
         if scene.vehicle.connected, let voltage = scene.vehicle.voltage {
@@ -445,8 +470,8 @@ final class DashRenderer {
 
     private func drawSpeedPill(_ scene: DashScene, context: CGContext) {
         let diameter: CGFloat = 116
-        let rect = CGRect(x: size.width - Layout.margin - diameter, y: size.height - Layout.margin - diameter,
-                          width: diameter, height: diameter)
+        let rect = side(CGRect(x: size.width - Layout.margin - diameter, y: size.height - Layout.margin - diameter,
+                               width: diameter, height: diameter))
         context.setFillColor(colors.cardOverMap)
         context.fillEllipse(in: rect)
         drawText(speedText(scene), font: pillSpeedFont, color: colors.label,

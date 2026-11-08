@@ -60,6 +60,8 @@ struct DashRoute {
     let steps: [Step]
     let distance: Double
     let expectedTravelTime: TimeInterval
+    /// Metres from the start to the end of each leg: each stop, then the destination.
+    var legEnds: [Double] = []
 
     init(coordinates: [CLLocationCoordinate2D], steps: [(instruction: String, distance: Double)],
          expectedTravelTime: TimeInterval) {
@@ -86,15 +88,38 @@ struct DashRoute {
             start += step.distance
         }
         self.steps = built
+        legEnds = [distance]
     }
 
     init(_ route: MKRoute) {
-        let count = route.polyline.pointCount
-        var coordinates = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: count)
-        route.polyline.getCoordinates(&coordinates, range: NSRange(location: 0, length: count))
-        self.init(coordinates: coordinates,
-                  steps: route.steps.map { ($0.instructions, $0.distance) },
-                  expectedTravelTime: route.expectedTravelTime)
+        self.init(legs: [route])
+    }
+
+    /// Legs joined end to end. Each leg after the first starts with an empty "start" step at the
+    /// stop; that is folded into the step before, so the stop is one manoeuvre, not two.
+    init(legs: [MKRoute]) {
+        var coordinates: [CLLocationCoordinate2D] = []
+        var steps: [(instruction: String, distance: Double)] = []
+        var ends: [Int] = []
+        for (legIndex, leg) in legs.enumerated() {
+            let count = leg.polyline.pointCount
+            var points = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: count)
+            leg.polyline.getCoordinates(&points, range: NSRange(location: 0, length: count))
+            if legIndex > 0, !points.isEmpty, !coordinates.isEmpty { points.removeFirst() }
+            coordinates += points
+            ends.append(max(0, coordinates.count - 1))
+            for (stepIndex, step) in leg.steps.enumerated() {
+                if step.instructions.isEmpty, legIndex > 0 || stepIndex > 0, !steps.isEmpty {
+                    steps[steps.count - 1].distance += step.distance
+                } else {
+                    steps.append((step.instructions, step.distance))
+                }
+            }
+        }
+        self.init(coordinates: coordinates, steps: steps,
+                  expectedTravelTime: legs.reduce(0) { $0 + $1.expectedTravelTime })
+        let cumulative = self.cumulative
+        legEnds = ends.map { cumulative.isEmpty ? 0 : cumulative[min($0, cumulative.count - 1)] }
     }
 
     /// Where we are along the route. `hint` is the segment found last time, which keeps the search

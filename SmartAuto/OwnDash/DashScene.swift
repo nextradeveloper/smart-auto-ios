@@ -28,6 +28,8 @@ struct DashScene {
         var upcoming: [CLLocationCoordinate2D]
         var status: DashNavigator.Status
         var destinationName: String
+        /// The turn right after the next one, when it comes within 150 m of it ("จากนั้น").
+        var then: DashManeuver? = nil
     }
 
     var date = Date()
@@ -47,6 +49,8 @@ struct DashScene {
     var compass: CompassSample?
     /// Guidance map tilted into perspective.
     var threeD = true
+    /// Layout mirrored left to right.
+    var mapOnRight = false
 }
 
 /// One compass reading: degrees clockwise from north, and when.
@@ -85,6 +89,7 @@ final class DashSceneStore {
     private var zoom = 1.0
     private var compass: CompassSample?
     private var threeD = true
+    private var mapOnRight = false
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -110,6 +115,10 @@ final class DashSceneStore {
         lock.lock(); self.zoom = zoom; lock.unlock()
     }
 
+    func set(mapOnRight: Bool) {
+        lock.lock(); self.mapOnRight = mapOnRight; lock.unlock()
+    }
+
     func set(threeD: Bool) {
         lock.lock(); self.threeD = threeD; lock.unlock()
     }
@@ -121,7 +130,8 @@ final class DashSceneStore {
     func scene() -> DashScene {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
-                         style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass, threeD: threeD)
+                         style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass, threeD: threeD,
+                         mapOnRight: mapOnRight)
     }
 }
 

@@ -176,6 +176,10 @@ private struct MainShellView: View {
         .tint(.cyan)
         .onAppear {
             let monitor = bluetooth
+            let screen = dashScreen
+            monitor.onLinkChange = { [weak screen] up in screen?.bikeLink(up) }
+            screen.startAutoConnect()
+            if monitor.status.isPositive { screen.bikeLink(true) }
             dashScreen.vehicleSource = {
                 DashScene.Vehicle(
                     connected: monitor.status.isPositive,
@@ -745,12 +749,16 @@ private struct DashTabView: View {
     @ObservedObject private var maps: DashMapProvider
     @StateObject private var launcher = BroadcastLauncher()
     @State private var showsSearch = false
+    @State private var showsAddStop = false
     @State private var showsMap = false
     @State private var previewing: DashDestination?
     @AppStorage(DashSettings.themeKey) private var theme = DashSettings.Theme.dark.rawValue
     @AppStorage(DashSettings.avoidHighwaysKey) private var avoidHighways = false
-    @AppStorage(DashSettings.avoidTollsKey) private var avoidTolls = false
+    @AppStorage(DashSettings.avoidTollsKey) private var avoidTolls = true
     @AppStorage(DashSettings.threeDKey) private var threeD = true
+    @AppStorage(DashSettings.autoConnectKey) private var autoConnect = true
+    @AppStorage(DashSettings.voiceKey) private var voice = true
+    @AppStorage(DashSettings.mapOnRightKey) private var mapOnRight = false
 
     init(dashScreen: DashScreenService) {
         self.dashScreen = dashScreen
@@ -766,6 +774,8 @@ private struct DashTabView: View {
                         .buttonStyle(.plain)
                         .listRowInsets(EdgeInsets())
                     statusRow
+                    Toggle("เปิดจออัตโนมัติ", isOn: $autoConnect)
+                        .onChange(of: autoConnect) { _ in dashScreen.autoConnectChanged() }
                 }
 
                 Section {
@@ -779,6 +789,27 @@ private struct DashTabView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        if let next = navigator.stops.first {
+                            HStack(spacing: 12) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("จุดแวะถัดไป")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(next.name)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                Button("ข้าม") { navigator.skipStop() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
+                        }
+                        Button { showsAddStop = true } label: {
+                            Label("เพิ่มจุดแวะ", systemImage: "plus.circle.fill")
+                        }
                         Button("จบการนำทาง", role: .destructive) { dashScreen.stopNavigation() }
                     } else {
                         Button { showsSearch = true } label: { searchField }
@@ -790,8 +821,9 @@ private struct DashTabView: View {
                 }
 
                 Section {
-                    Toggle("เลี่ยงทางด่วน", isOn: $avoidHighways)
-                    Toggle("เลี่ยงค่าผ่านทาง", isOn: $avoidTolls)
+                    Toggle("เสียงนำทาง", isOn: $voice)
+                    Toggle("เลี่ยงทางด่วน/มอเตอร์เวย์", isOn: $avoidTolls)
+                    Toggle("เลี่ยงทางหลวง", isOn: $avoidHighways)
                     Picker("ธีม", selection: $theme) {
                         ForEach(DashSettings.Theme.allCases) { option in
                             Text(option.title).tag(option.rawValue)
@@ -801,6 +833,11 @@ private struct DashTabView: View {
                     Picker("มุมมอง", selection: $threeD) {
                         Text("2D").tag(false)
                         Text("3D").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("แผนที่", selection: $mapOnRight) {
+                        Text("แผนที่ซ้าย").tag(false)
+                        Text("แผนที่ขวา").tag(true)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -833,6 +870,11 @@ private struct DashTabView: View {
             .navigationTitle("จอรถ")
             .sheet(isPresented: $showsSearch) {
                 DashDestinationSearch(dashScreen: dashScreen, navigator: navigator)
+            }
+            .sheet(isPresented: $showsAddStop) {
+                DashDestinationSearch(dashScreen: dashScreen, navigator: navigator) { place in
+                    navigator.addStop(place)
+                }
             }
             .sheet(item: $previewing) { place in
                 NavigationStack {
