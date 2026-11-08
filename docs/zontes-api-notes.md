@@ -154,3 +154,14 @@ moving, and the Dashboard map did not turn at all. `DashMotion` now learns, whil
 mount) compass plus the angle is the heading, live and also stopped. In a pocket it never steadies
 and GPS course is used. The Dashboard map turns too (square 1280 px pictures). The phone's
 full-screen map is landscape with the dash's layout (OrientationLock in SmartAutoApp.swift).
+
+## Camera unit (DVR) on the bike's Wi-Fi
+
+`http://192.168.3.1:7686`, JSON POST to the root, as the official app's `a/cb3.java` sends it:
+`{"METHOD":"VIDEO.DATE","previewType":"front|rear"}` → `dateList`; `VIDEO.TIME` with `date` →
+`timeBeanList`; `VIDEO.INFO.LIST` with `date`, `time`, `index`, `num`, `sort` → `videoBeanList`
+(`playUrl`, `thumbUrl`, `title`, `name`; URLs may lack the scheme); `PICTURE.INFO.LIST` with
+`previewType: all` → `pictureBeanList` (`pictureUrl`); `LOG.FILE.LIST` → `logList`. The official
+app has no live view (its only RTSP reference is ExoPlayer's timeout constant). Smart Auto's
+camera page (`SmartAuto/Dashcam/`) plays and saves recordings, and "ทดสอบภาพสด" probes ports,
+RTSP and HTTP paths and JSON methods for a live stream; results go to the log under `CAM`.

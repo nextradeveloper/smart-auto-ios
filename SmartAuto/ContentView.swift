@@ -809,6 +809,12 @@ private struct DashTabView: View {
                     .background(BroadcastPickerHost(launcher: launcher).frame(width: 1, height: 1))
 
                     NavigationLink {
+                        DashcamView()
+                    } label: {
+                        Label("กล้องรถ", systemImage: "video")
+                    }
+
+                    NavigationLink {
                         LegacyToolsView()
                     } label: {
                         Label("ตั้งค่าจอและ log", systemImage: "slider.horizontal.3")
