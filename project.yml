@@ -22,6 +22,13 @@ targets:
     sources:
       - path: SmartAuto
       - path: Shared
+      # Software H.264 for Smart Auto's own dash screen (minih264e, CC0); see SoftH264.h.
+      - path: Vendor/minih264
+        excludes:
+          - module.modulemap
+        compilerFlags:
+          - -w
+          - -O3
     info:
       path: SmartAuto/Info.plist
       properties:
@@ -64,6 +71,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto
         PRODUCT_NAME: SmartAuto
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Vendor/minih264
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS:
           - $(inherited)
@@ -76,6 +84,7 @@ targets:
       - sdk: CoreLocation.framework
       - sdk: CoreBluetooth.framework
       - sdk: CryptoKit.framework
+      - sdk: Accelerate.framework
       - sdk: Network.framework
       - sdk: Security.framework
 
@@ -129,5 +138,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.nextradeveloper.smartauto.tests
         GENERATE_INFOPLIST_FILE: YES
+        # @testable import SmartAuto needs the C module the app imports.
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Vendor/minih264
     dependencies:
       - target: SmartAuto

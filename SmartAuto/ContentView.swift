@@ -722,6 +722,7 @@ private struct WheelButton: View {
 
 private struct CarPlayView: View {
     @StateObject private var launcher = BroadcastLauncher()
+    @StateObject private var ownDash = LockedDashTest()
 
     var body: some View {
         NavigationStack {
@@ -751,6 +752,24 @@ private struct CarPlayView: View {
                     NavigationLink("การตั้งค่าจอและ log") {
                         LegacyToolsView()
                     }
+                }
+
+                Section {
+                    Button {
+                        ownDash.isRunning ? ownDash.stop() : ownDash.start()
+                    } label: {
+                        Label(ownDash.isRunning ? "หยุดทดสอบ" : "เริ่มทดสอบจอของ Smart Auto",
+                              systemImage: ownDash.isRunning ? "stop.circle.fill" : "lock.display")
+                    }
+                    if ownDash.isRunning {
+                        Text("\(ownDash.message) · ส่งแล้ว \(ownDash.framesSent) เฟรม")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("ทดลอง: จอของ Smart Auto (ล็อกจอได้)")
+                } footer: {
+                    Text("หยุดแชร์หน้าจอก่อน กดเริ่ม รอจนจอรถขึ้นนาฬิกา แล้วกดล็อกโทรศัพท์ นาฬิกาบนจอรถต้องเดินต่อ")
                 }
             }
             .scrollContentBackground(.hidden)

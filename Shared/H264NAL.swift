@@ -30,6 +30,36 @@ enum H264NAL {
         accessUnit.append(nal.dropFirst())
     }
 
+    /// The NALs of an Annex-B stream, start codes removed.
+    static func units(inAnnexB data: Data) -> [Data] {
+        let bytes = [UInt8](data)
+        var starts: [(code: Int, payload: Int)] = []
+        var index = 0
+        while index + 2 < bytes.count {
+            if bytes[index] == 0, bytes[index + 1] == 0, bytes[index + 2] == 1 {
+                let code = index > 0 && bytes[index - 1] == 0 ? index - 1 : index
+                starts.append((code, index + 3))
+                index += 3
+            } else {
+                index += 1
+            }
+        }
+        return starts.indices.compactMap { position in
+            let end = position + 1 < starts.count ? starts[position + 1].code : bytes.count
+            let begin = starts[position].payload
+            return begin < end ? Data(bytes[begin ..< end]) : nil
+        }
+    }
+
+    /// An Annex-B access unit with every header normalized and SEI/AUD dropped.
+    static func normalized(annexB data: Data) -> Data {
+        var accessUnit = Data()
+        for unit in units(inAnnexB: data) {
+            appendAnnexB(unit, to: &accessUnit)
+        }
+        return accessUnit
+    }
+
     /// The header byte of every NAL in an Annex-B access unit, for the log.
     static func headers(inAnnexB data: Data) -> [UInt8] {
         let bytes = [UInt8](data)

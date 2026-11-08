@@ -113,3 +113,13 @@ keeps the newest challenge seen while waiting for the acknowledgement and signs 
 
 If the app is force-quit, iOS does not wake it when Bluetooth drops; the spot then updates at the
 next Lock.
+
+## Smart Auto's own dash screen (2026-11-08)
+
+Screen share stops when the phone locks, and iOS takes the hardware video encoder from an app in
+the background. Step 1 tests the alternative: `SmartAuto/OwnDash/` draws its own picture with Core
+Graphics, converts it with Accelerate, encodes it in software with minih264e
+(`Vendor/minih264`, CC0: Baseline level 3.1 at 1280x528, the same SPS bytes screen share sends),
+and sends it through the same DashSession as screen share; location updates keep the app running
+when locked. The log tag is `OWNDASH`: one line every 10 s with fps, draw/encode time, frame size
+and whether the phone is locked.

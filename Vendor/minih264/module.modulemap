@@ -1,0 +1,4 @@
+module MiniH264 {
+    header "SoftH264.h"
+    export *
+}
