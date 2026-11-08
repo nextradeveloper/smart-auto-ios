@@ -737,14 +737,15 @@ private struct WheelButton: View {
     }
 }
 
-/// The dash tab mirrors the bike's screen: a live view of what the dash shows, the controls for it
-/// underneath (where to go, route options, theme), and screen share as the alternative.
+/// The dash tab, in order of what matters on a ride: the dash as it is now (tap for the full-screen
+/// map), whether it is on, where to go, then a few settings. Few words.
 private struct DashTabView: View {
     @ObservedObject var dashScreen: DashScreenService
     @ObservedObject private var navigator: DashNavigator
     @ObservedObject private var maps: DashMapProvider
     @StateObject private var launcher = BroadcastLauncher()
     @State private var showsSearch = false
+    @State private var showsMap = false
     @State private var previewing: DashDestination?
     @AppStorage(DashSettings.themeKey) private var theme = DashSettings.Theme.dark.rawValue
     @AppStorage(DashSettings.avoidHighwaysKey) private var avoidHighways = false
@@ -760,45 +761,37 @@ private struct DashTabView: View {
         NavigationStack {
             List {
                 Section {
-                    screenPreview
+                    Button { showsMap = true } label: { screenPreview }
+                        .buttonStyle(.plain)
                         .listRowInsets(EdgeInsets())
                     statusRow
                 }
 
-                Section("นำทาง") {
+                Section {
                     if navigator.isNavigating {
-                        guidanceCard
-                        Button(role: .destructive) {
-                            dashScreen.stopNavigation()
-                        } label: {
-                            Label("จบการนำทาง", systemImage: "xmark.circle.fill")
+                        DashGuidanceBanner(navigator: navigator)
+                            .padding(.vertical, 6)
+                        if let preparing = maps.preparing {
+                            ProgressView(value: Double(preparing.done), total: Double(max(preparing.total, 1))) {
+                                Text("แผนที่ \(preparing.done)/\(preparing.total)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        Button("จบการนำทาง", role: .destructive) { dashScreen.stopNavigation() }
                     } else {
                         Button { showsSearch = true } label: { searchField }
                             .buttonStyle(.plain)
                         ForEach(Array(navigator.recents.prefix(3))) { place in
-                            Button { previewing = place } label: {
-                                RecentPlaceRow(place: place)
-                            }
+                            Button { previewing = place } label: { RecentPlaceRow(place: place) }
                         }
                     }
                 }
 
                 Section {
-                    Toggle(isOn: $avoidHighways) {
-                        Label("เลี่ยงทางด่วนและมอเตอร์เวย์", systemImage: "road.lanes")
-                    }
-                    Toggle(isOn: $avoidTolls) {
-                        Label("เลี่ยงทางที่เก็บค่าผ่านทาง", systemImage: "banknote")
-                    }
-                } header: {
-                    Text("ตัวเลือกเส้นทาง")
-                } footer: {
-                    Text("ใช้กับการหาเส้นทางครั้งถัดไปและการคำนวณเส้นทางใหม่")
-                }
-
-                Section("ธีมแผนที่") {
-                    Picker("ธีมแผนที่", selection: $theme) {
+                    Toggle("เลี่ยงทางด่วน", isOn: $avoidHighways)
+                    Toggle("เลี่ยงค่าผ่านทาง", isOn: $avoidTolls)
+                    Picker("ธีม", selection: $theme) {
                         ForEach(DashSettings.Theme.allCases) { option in
                             Text(option.title).tag(option.rawValue)
                         }
@@ -806,11 +799,11 @@ private struct DashTabView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section("ตัวเลือกอื่น") {
+                Section {
                     Button {
                         launcher.launch()
                     } label: {
-                        Label("แชร์หน้าจอ iPhone", systemImage: "rectangle.on.rectangle")
+                        Label("แชร์หน้าจอ", systemImage: "rectangle.on.rectangle")
                     }
                     .disabled(dashScreen.isRunning)
                     .background(BroadcastPickerHost(launcher: launcher).frame(width: 1, height: 1))
@@ -818,7 +811,7 @@ private struct DashTabView: View {
                     NavigationLink {
                         LegacyToolsView()
                     } label: {
-                        Label("การตั้งค่าจอและ log", systemImage: "slider.horizontal.3")
+                        Label("ตั้งค่าจอและ log", systemImage: "slider.horizontal.3")
                     }
                 }
             }
@@ -839,44 +832,48 @@ private struct DashTabView: View {
                         }
                 }
             }
+            .fullScreenCover(isPresented: $showsMap) {
+                DashMapScreen(dashScreen: dashScreen, navigator: navigator)
+            }
             .onAppear { dashScreen.previewEnabled = true }
             .onDisappear { dashScreen.previewEnabled = false }
         }
     }
 
-    /// The dash as it is now, at its own shape (1280x528).
+    /// The dash as it is now, at its own shape (1280x528). Tap for the full-screen map.
     private var screenPreview: some View {
-        ZStack {
-            Color(white: 0.07)
-            if dashScreen.isRunning, let preview = dashScreen.preview {
-                Image(decorative: preview, scale: 1)
-                    .resizable()
-                    .interpolation(.medium)
-            } else {
-                VStack(spacing: 8) {
+        ZStack(alignment: .topTrailing) {
+            ZStack {
+                Color(white: 0.07)
+                if dashScreen.isRunning, let preview = dashScreen.preview {
+                    Image(decorative: preview, scale: 1)
+                        .resizable()
+                        .interpolation(.medium)
+                } else {
                     Image(systemName: "speedometer")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(dashScreen.isRunning ? "กำลังเตรียมภาพ" : "จอ Smart Auto ปิดอยู่")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(.black.opacity(0.45), in: Circle())
+                .padding(10)
         }
         .aspectRatio(1280.0 / 528.0, contentMode: .fit)
     }
 
     private var statusRow: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 9, height: 9)
             Text(statusText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .font(.subheadline.weight(.medium))
             Spacer(minLength: 8)
-            Button(dashScreen.isRunning ? "ปิดจอ" : "เปิดจอ") {
+            Button(dashScreen.isRunning ? "ปิด" : "เปิดจอ") {
                 dashScreen.isRunning ? dashScreen.stop() : dashScreen.start()
             }
             .buttonStyle(.borderedProminent)
@@ -888,75 +885,32 @@ private struct DashTabView: View {
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
             Text("ค้นหาสถานที่")
-                .foregroundStyle(.secondary)
             Spacer()
         }
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
-        .frame(height: 40)
+        .frame(height: 42)
         .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(Rectangle())
     }
 
-    /// The same turn card the dash shows, so the phone and the dash agree at a glance.
-    private var guidanceCard: some View {
-        let scene = navigator.sceneNavigation()
-        let symbol = navigator.status == .rerouting ? "arrow.triangle.2.circlepath" : (scene?.maneuver.symbol ?? "arrow.up")
-        let headline = scene?.distanceToManeuver.map(DashFormat.distance) ?? (navigator.status == .arrived ? "ถึงแล้ว" : "–")
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 14) {
-                Image(systemName: symbol)
-                    .font(.system(size: 34, weight: .semibold))
-                    .frame(width: 48)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(headline)
-                        .font(.title.weight(.semibold).monospacedDigit())
-                    Text(scene?.instruction ?? "")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Divider()
-            HStack {
-                Label(navigator.destination?.name ?? "", systemImage: "mappin.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                Text(arrivalText)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if let preparing = maps.preparing {
-                ProgressView(value: Double(preparing.done), total: Double(max(preparing.total, 1))) {
-                    Text("เตรียมแผนที่ตามเส้นทาง \(preparing.done)/\(preparing.total) · เปิดแอปไว้จนเสร็จ")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var arrivalText: String {
-        guard let progress = navigator.progress else { return "" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "HH:mm"
-        let arrival = formatter.string(from: Date().addingTimeInterval(progress.remainingTime))
-        return "ถึง \(arrival) · \(DashFormat.distance(progress.remainingDistance))"
-    }
-
     private var statusText: String {
-        guard dashScreen.isRunning else { return "ปิดอยู่ · ต่อ Wi-Fi ของรถ (ZT_…) แล้วกดเปิดจอ" }
-        if dashScreen.state == .streaming { return "แสดงบนจอรถแล้ว · ล็อกโทรศัพท์ได้" }
-        return dashScreen.message.isEmpty ? dashScreen.state.title : dashScreen.message
+        guard dashScreen.isRunning else { return "ปิดอยู่" }
+        switch dashScreen.state {
+        case .streaming: return "แสดงบนจอรถ"
+        case .reconnecting, .failed: return "ต่อ Wi-Fi รถไม่ได้"
+        default: return "กำลังเชื่อมต่อ"
+        }
     }
 
     private var statusColor: Color {
         guard dashScreen.isRunning else { return .secondary }
-        return dashScreen.state == .streaming ? .green : .orange
+        switch dashScreen.state {
+        case .streaming: return .green
+        case .reconnecting, .failed: return .red
+        default: return .orange
+        }
     }
 }
 
@@ -964,23 +918,13 @@ private struct RecentPlaceRow: View {
     let place: DashDestination
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "clock.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(Color.gray, in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text(place.name)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if !place.subtitle.isEmpty {
-                    Text(place.subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            Text(place.name)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
         }
     }
 }

@@ -250,7 +250,7 @@ final class DashRenderer {
         if let position = scene.position ?? scene.location?.coordinate {
             let course = scene.course ?? 0
             let pixelsPerPoint = scene.map?.pixelsPerMapPoint
-                ?? 1 / (1.25 * MKMapPointsPerMeterAtLatitude(position.latitude))
+                ?? 1 / (scene.guidanceMetersPerPixel * MKMapPointsPerMeterAtLatitude(position.latitude))
             context.saveGState()
             context.translateBy(x: puck.x, y: puck.y)
             context.rotate(by: -CGFloat(course) * .pi / 180)

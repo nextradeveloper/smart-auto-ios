@@ -177,6 +177,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         let style = DashSettings.currentStyle()
         store.set(style: style)
         maps.set(style: style)
+        let zoom = DashSettings.zoom
+        store.set(zoom: zoom)
+        maps.set(zoom: zoom)
         store.set(vehicle: vehicleSource?() ?? DashScene.Vehicle())
         store.set(navigation: navigator.sceneNavigation())
         if !navigator.isNavigating { maps.set(mode: .overview) }

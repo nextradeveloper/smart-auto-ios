@@ -24,6 +24,7 @@ final class DashMapProvider: ObservableObject {
         var pixels: CGSize {
             self == .overview ? CGSize(width: 1152, height: 768) : CGSize(width: 2048, height: 2048)
         }
+        /// At zoom 1; DashSettings.zoom multiplies it.
         var metersPerPixel: Double { self == .overview ? 1.0 : 1.25 }
         /// A new picture once we are this many pixels from the centre of the current one: before
         /// an edge can come into view (overview pane 824x496; guidance turns 1280x528 around us).
@@ -35,6 +36,7 @@ final class DashMapProvider: ObservableObject {
         let rect: MKMapRect
         let mode: Mode
         let style: DashStyle
+        let zoom: Double
     }
 
     var onMap: ((DashMapImage?) -> Void)?
@@ -42,6 +44,7 @@ final class DashMapProvider: ObservableObject {
 
     private var mode: Mode = .overview
     private var style: DashStyle = .dark
+    private var zoom: Double = 1
     private var current: Picture?
     private var inFlight: MKMapSnapshotter?
     private var inFlightSince = Date.distantPast
@@ -100,14 +103,25 @@ final class DashMapProvider: ObservableObject {
         if let preparedRoute, mode == .guidance { prepare(along: preparedRoute) }
     }
 
+    /// Closer or further maps; switching makes new ones, including those along the route.
+    func set(zoom: Double) {
+        guard zoom != self.zoom else { return }
+        self.zoom = zoom
+        current = nil
+        lastRequest = .distantPast
+        inFlight?.cancel()
+        inFlight = nil
+        if let preparedRoute, mode == .guidance { prepare(along: preparedRoute) }
+    }
+
     /// Shows the last overview picture straight away if it covers `location`.
     func showSaved(for location: CLLocation) {
-        guard mode == .overview, current == nil, let saved = SavedOverview.load(style: style) else { return }
+        guard mode == .overview, current == nil, zoom == 1, let saved = SavedOverview.load(style: style) else { return }
         let here = MKMapPoint(location.coordinate)
         let margin = saved.rect.width * 0.2
         guard saved.rect.insetBy(dx: margin, dy: margin).contains(here) else { return }
         current = Picture(center: MKMapPoint(x: saved.rect.midX, y: saved.rect.midY), rect: saved.rect,
-                          mode: .overview, style: style)
+                          mode: .overview, style: style, zoom: 1)
         onMap?(DashMapImage(image: saved.image, mapRect: saved.rect))
     }
 
@@ -119,7 +133,7 @@ final class DashMapProvider: ObservableObject {
         }
         guard inFlight == nil, Date().timeIntervalSince(lastRequest) >= 2 else { return }
         let here = MKMapPoint(location.coordinate)
-        if let current, current.mode == mode, current.style == style {
+        if let current, current.mode == mode, current.style == style, current.zoom == zoom {
             let pixelsPerPoint = Double(mode.pixels.width) / current.rect.width
             let distance = hypot(here.x - current.center.x, here.y - current.center.y) * pixelsPerPoint
             if distance < mode.refreshPixels { return }
@@ -134,8 +148,9 @@ final class DashMapProvider: ObservableObject {
 
     // MARK: Live snapshots
 
-    nonisolated private static func rect(center: MKMapPoint, latitude: CLLocationDegrees, mode: Mode) -> MKMapRect {
-        let width = Double(mode.pixels.width) * mode.metersPerPixel * MKMapPointsPerMeterAtLatitude(latitude)
+    nonisolated private static func rect(center: MKMapPoint, latitude: CLLocationDegrees, mode: Mode,
+                                         zoom: Double) -> MKMapRect {
+        let width = Double(mode.pixels.width) * mode.metersPerPixel * zoom * MKMapPointsPerMeterAtLatitude(latitude)
         let height = width * Double(mode.pixels.height / mode.pixels.width)
         return MKMapRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
     }
@@ -168,8 +183,8 @@ final class DashMapProvider: ObservableObject {
     }
 
     private func snapshot(center: MKMapPoint, latitude: CLLocationDegrees) {
-        let mode = mode, style = style
-        let rect = Self.rect(center: center, latitude: latitude, mode: mode)
+        let mode = mode, style = style, zoom = zoom
+        let rect = Self.rect(center: center, latitude: latitude, mode: mode, zoom: zoom)
         let snapshotter = MKMapSnapshotter(options: Self.options(rect: rect, mode: mode, style: style))
         inFlight = snapshotter
         inFlightSince = Date()
@@ -186,12 +201,12 @@ final class DashMapProvider: ObservableObject {
                               "\(error?.localizedDescription ?? "no image").")
                     return
                 }
-                guard self.mode == mode, self.style == style else { return }
+                guard self.mode == mode, self.style == style, self.zoom == zoom else { return }
                 self.successes += 1
-                self.current = Picture(center: center, rect: rect, mode: mode, style: style)
+                self.current = Picture(center: center, rect: rect, mode: mode, style: style, zoom: zoom)
                 self.onMap?(DashMapImage(image: image, mapRect: rect))
                 self.note("ok", "Map snapshot ok in \(seconds) s (\(self.phoneState())).")
-                if mode == .overview { SavedOverview.save(image, rect: rect, style: style) }
+                if mode == .overview, zoom == 1 { SavedOverview.save(image, rect: rect, style: style) }
             }
         }
     }
@@ -217,7 +232,7 @@ final class DashMapProvider: ObservableObject {
         prepared = []
         preparing = (0, centers.count)
         let started = Date()
-        let style = style
+        let style = style, zoom = zoom
 
         preparation = Task { [weak self] in
             var made = 0
@@ -226,7 +241,7 @@ final class DashMapProvider: ObservableObject {
                 var next = 0
                 while next < min(3, centers.count) {
                     let index = next
-                    group.addTask { await DashMapProvider.prepareOne(centers[index], index: index, folder: folder, style: style) }
+                    group.addTask { await DashMapProvider.prepareOne(centers[index], index: index, folder: folder, style: style, zoom: zoom) }
                     next += 1
                 }
                 while let (center, rect, file) = await group.next() {
@@ -237,7 +252,7 @@ final class DashMapProvider: ObservableObject {
                     self?.preparing = (made, centers.count)
                     if next < centers.count {
                         let index = next
-                        group.addTask { await DashMapProvider.prepareOne(centers[index], index: index, folder: folder, style: style) }
+                        group.addTask { await DashMapProvider.prepareOne(centers[index], index: index, folder: folder, style: style, zoom: zoom) }
                         next += 1
                     }
                 }
@@ -250,9 +265,9 @@ final class DashMapProvider: ObservableObject {
     }
 
     nonisolated private static func prepareOne(_ coordinate: CLLocationCoordinate2D, index: Int, folder: URL,
-                                               style: DashStyle) async -> (MKMapPoint, MKMapRect, URL?) {
+                                               style: DashStyle, zoom: Double) async -> (MKMapPoint, MKMapRect, URL?) {
         let center = MKMapPoint(coordinate)
-        let mapRect = Self.rect(center: center, latitude: coordinate.latitude, mode: .guidance)
+        let mapRect = Self.rect(center: center, latitude: coordinate.latitude, mode: .guidance, zoom: zoom)
         let file = folder.appendingPathComponent("\(index).jpg")
         let settings = Self.options(rect: mapRect, mode: .guidance, style: style)
         let ok = await withCheckedContinuation { continuation in
@@ -286,7 +301,7 @@ final class DashMapProvider: ObservableObject {
 
     private func load(_ entry: (center: MKMapPoint, rect: MKMapRect, file: URL)) {
         let mode = mode, style = style
-        current = Picture(center: entry.center, rect: entry.rect, mode: mode, style: style)
+        current = Picture(center: entry.center, rect: entry.rect, mode: mode, style: style, zoom: zoom)
         let file = entry.file
         let rect = entry.rect
         decodeQueue.async { [weak self] in

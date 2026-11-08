@@ -41,6 +41,8 @@ struct DashScene {
     var vehicle = Vehicle()
     var navigation: Navigation?
     var style: DashStyle = .dark
+    /// Guidance map scale when no picture has arrived yet (the picture carries its own).
+    var guidanceMetersPerPixel = 1.25
 }
 
 /// A rendered map picture and the Web Mercator rectangle it covers, so any coordinate can be
@@ -70,6 +72,7 @@ final class DashSceneStore {
     private var vehicle = DashScene.Vehicle()
     private var navigation: DashScene.Navigation?
     private var style: DashStyle = .dark
+    private var zoom = 1.0
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -91,10 +94,14 @@ final class DashSceneStore {
         lock.lock(); self.style = style; lock.unlock()
     }
 
+    func set(zoom: Double) {
+        lock.lock(); self.zoom = zoom; lock.unlock()
+    }
+
     func scene() -> DashScene {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
-                         style: style)
+                         style: style, guidanceMetersPerPixel: 1.25 * zoom)
     }
 }
 

@@ -81,7 +81,7 @@ struct DashDestinationSearch: View {
             }
             .listStyle(.insetGrouped)
             .searchable(text: $search.query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "ค้นหาสถานที่หรือที่อยู่")
+                        prompt: "ค้นหาสถานที่")
             .autocorrectionDisabled()
             .navigationTitle("ไปที่ไหน")
             .navigationBarTitleDisplayMode(.inline)
@@ -208,8 +208,6 @@ struct DashRoutePreview: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                } footer: {
-                    Text("เส้นทางจาก Apple Maps แบบรถยนต์ จอรถจะบอกทางเลี้ยวและเวลาถึง แม้ล็อกโทรศัพท์")
                 }
             }
             .listStyle(.insetGrouped)
