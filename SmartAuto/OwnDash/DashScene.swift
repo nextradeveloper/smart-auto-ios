@@ -3,6 +3,11 @@ import CoreLocation
 import Foundation
 import MapKit
 
+/// Light or dark: the map pictures and every card follow it.
+enum DashStyle: Equatable, Sendable {
+    case dark, light
+}
+
 /// Everything one dash frame shows, copied out of the live state so drawing never waits on it.
 struct DashScene {
     struct Vehicle: Equatable {
@@ -35,6 +40,7 @@ struct DashScene {
     var map: DashMapImage?
     var vehicle = Vehicle()
     var navigation: Navigation?
+    var style: DashStyle = .dark
 }
 
 /// A rendered map picture and the Web Mercator rectangle it covers, so any coordinate can be
@@ -63,6 +69,7 @@ final class DashSceneStore {
     private var map: DashMapImage?
     private var vehicle = DashScene.Vehicle()
     private var navigation: DashScene.Navigation?
+    private var style: DashStyle = .dark
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -80,15 +87,22 @@ final class DashSceneStore {
         lock.lock(); self.navigation = navigation; lock.unlock()
     }
 
+    func set(style: DashStyle) {
+        lock.lock(); self.style = style; lock.unlock()
+    }
+
     func scene() -> DashScene {
         lock.lock(); defer { lock.unlock() }
-        return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation)
+        return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
+                         style: style)
     }
 }
 
 /// Turns once-a-second GPS fixes into movement that looks continuous at the frame rate: the last
 /// fix is carried forward along its course at its speed, and what is drawn eases towards that.
-/// Without it the map jumped once a second, which read as stutter on the dash.
+/// Without it the map jumped once a second, which read as stutter on the dash. Standing still, GPS
+/// wanders a few metres a second; that is held, not followed (field log 2026-11-08: 20 fps on the
+/// wire and still "กระตุก" with the bike parked).
 struct DashMotion {
     private var fix: CLLocation?
     private var shown: MKMapPoint?
@@ -117,9 +131,17 @@ struct DashMotion {
         if let current = shown {
             let perMeter = MKMapPointsPerMeterAtLatitude(latest.coordinate.latitude)
             let gap = hypot(target.x - current.x, target.y - current.y) / perMeter
-            // Far off (first fix after a gap): jump. Otherwise ease a third of the way each frame.
-            shown = gap > 60 ? target : MKMapPoint(x: current.x + (target.x - current.x) * 0.3,
-                                                   y: current.y + (target.y - current.y) * 0.3)
+            let parked = latest.speed < 0.8
+            if gap > 60 {
+                shown = target // first fix after a gap: jump
+            } else if parked, gap < max(12, latest.horizontalAccuracy) {
+                // Standing still: GPS drift, not movement.
+            } else {
+                // Moving: ease a sixth of the way each frame, about a third of a second at 20 fps.
+                let rate = parked ? 0.05 : 1.0 / 6
+                shown = MKMapPoint(x: current.x + (target.x - current.x) * rate,
+                                   y: current.y + (target.y - current.y) * rate)
+            }
         } else {
             shown = target
         }

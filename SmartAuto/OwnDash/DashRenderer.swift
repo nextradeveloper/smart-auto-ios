@@ -13,20 +13,38 @@ import UIKit
 final class DashRenderer {
     let size: CGSize
 
-    // Apple's dark-mode system colours, in sRGB like the frame they are drawn into.
-    private enum Palette {
-        static let background = srgb(0, 0, 0, 1)
-        static let card = srgb(0.110, 0.110, 0.118, 1)        // #1C1C1E
-        static let cardOverMap = srgb(0.110, 0.110, 0.118, 0.94)
-        static let emptyMap = srgb(0.067, 0.071, 0.078, 1)    // #111214
-        static let label = srgb(1, 1, 1, 1)
-        static let secondary = srgb(0.557, 0.557, 0.576, 1)   // #8E8E93
-        static let blue = srgb(0.039, 0.518, 1, 1)            // #0A84FF
-        static let routeCasing = srgb(0.016, 0.310, 0.690, 1)
-        static let green = srgb(0.188, 0.820, 0.345, 1)       // #30D158
-        static let yellow = srgb(1, 0.839, 0.039, 1)          // #FFD60A
-        static let red = srgb(1, 0.271, 0.227, 1)             // #FF453A
-        static let shadow = srgb(0, 0, 0, 0.45)
+    /// Apple's system colours for one appearance, in sRGB like the frame they are drawn into.
+    private struct Colors {
+        let background, card, cardOverMap, emptyMap, label, secondary: CGColor
+        let blue, routeCasing, green, yellow, red, shadow: CGColor
+
+        static let dark = Colors(
+            background: srgb(0, 0, 0, 1),
+            card: srgb(0.110, 0.110, 0.118, 1),          // #1C1C1E
+            cardOverMap: srgb(0.110, 0.110, 0.118, 0.94),
+            emptyMap: srgb(0.067, 0.071, 0.078, 1),      // #111214
+            label: srgb(1, 1, 1, 1),
+            secondary: srgb(0.557, 0.557, 0.576, 1),     // #8E8E93
+            blue: srgb(0.039, 0.518, 1, 1),              // #0A84FF
+            routeCasing: srgb(0.016, 0.310, 0.690, 1),
+            green: srgb(0.188, 0.820, 0.345, 1),         // #30D158
+            yellow: srgb(1, 0.839, 0.039, 1),            // #FFD60A
+            red: srgb(1, 0.271, 0.227, 1),               // #FF453A
+            shadow: srgb(0, 0, 0, 0.45))
+
+        static let light = Colors(
+            background: srgb(0.949, 0.949, 0.969, 1),    // #F2F2F7
+            card: srgb(1, 1, 1, 1),
+            cardOverMap: srgb(1, 1, 1, 0.95),
+            emptyMap: srgb(0.898, 0.898, 0.918, 1),      // #E5E5EA
+            label: srgb(0, 0, 0, 1),
+            secondary: srgb(0.431, 0.431, 0.451, 1),     // #6E6E73
+            blue: srgb(0, 0.478, 1, 1),                  // #007AFF
+            routeCasing: srgb(0, 0.349, 0.788, 1),
+            green: srgb(0.204, 0.780, 0.349, 1),         // #34C759
+            yellow: srgb(1, 0.584, 0, 1),                // #FF9500, readable on white
+            red: srgb(1, 0.231, 0.188, 1),               // #FF3B30
+            shadow: srgb(0, 0, 0, 0.25))
 
         private static func srgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat) -> CGColor {
             let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
@@ -34,6 +52,14 @@ final class DashRenderer {
                 ?? CGColor(red: red, green: green, blue: blue, alpha: alpha)
         }
     }
+
+    /// The puck stays white-ringed in both appearances, as in Apple Maps.
+    private static let white = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                       components: [1, 1, 1, 1]) ?? CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+
+    /// The palette of the frame being drawn.
+    private var colors = Colors.dark
+    private var style: DashStyle = .dark
 
     private enum Layout {
         static let margin: CGFloat = 16
@@ -72,27 +98,36 @@ final class DashRenderer {
         return formatter
     }()
 
+    /// SF Symbols rendered once per style, keyed "name|dark" / "name|light".
     private var symbols: [String: CGImage] = [:]
 
     init(size: CGSize) {
         self.size = size
-        // Rendered once, here, rather than per frame behind the lock screen.
-        var wanted: [(String, CGFloat, CGColor)] = [
-            ("speedometer", 22, Palette.secondary), ("lock.fill", 24, Palette.label),
-            ("lock.open.fill", 24, Palette.yellow), ("bolt.slash.fill", 24, Palette.secondary),
-            ("battery.100", 26, Palette.green), ("battery.75", 26, Palette.green),
-            ("battery.50", 26, Palette.yellow), ("battery.25", 26, Palette.red),
-            ("arrow.triangle.2.circlepath", 60, Palette.label),
-        ]
-        wanted += DashManeuver.allSymbols.map { ($0, 60, Palette.label) }
-        for (name, point, color) in wanted {
-            symbols[name] = Self.symbol(name, pointSize: point, color: UIColor(cgColor: color))
+        // Rendered here, once, rather than per frame behind the lock screen.
+        for (style, palette) in [(DashStyle.dark, Colors.dark), (DashStyle.light, Colors.light)] {
+            var wanted: [(String, CGFloat, CGColor)] = [
+                ("speedometer", 22, palette.secondary), ("lock.fill", 24, palette.label),
+                ("lock.open.fill", 24, palette.yellow), ("bolt.slash.fill", 24, palette.secondary),
+                ("battery.100", 26, palette.green), ("battery.75", 26, palette.green),
+                ("battery.50", 26, palette.yellow), ("battery.25", 26, palette.red),
+                ("arrow.triangle.2.circlepath", 60, palette.label),
+            ]
+            wanted += DashManeuver.allSymbols.map { ($0, 60, palette.label) }
+            for (name, point, color) in wanted {
+                symbols[Self.symbolKey(name, style)] = Self.symbol(name, pointSize: point, color: UIColor(cgColor: color))
+            }
         }
+    }
+
+    private static func symbolKey(_ name: String, _ style: DashStyle) -> String {
+        "\(name)|\(style == .dark ? "dark" : "light")"
     }
 
     // MARK: Frame
 
     func draw(_ scene: DashScene, in context: CGContext) {
+        style = scene.style
+        colors = scene.style == .light ? .light : .dark
         context.saveGState()
         // Lay out top-left first, like UIKit; text and images flip back locally.
         context.translateBy(x: 0, y: size.height)
@@ -100,7 +135,7 @@ final class DashRenderer {
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         context.interpolationQuality = .medium
 
-        context.setFillColor(Palette.background)
+        context.setFillColor(colors.background)
         context.fill(CGRect(origin: .zero, size: size))
         if let navigation = scene.navigation {
             drawGuidance(scene, navigation, context: context)
@@ -132,7 +167,7 @@ final class DashRenderer {
         context.addPath(CGPath(roundedRect: pane, cornerWidth: Layout.cornerRadius,
                                cornerHeight: Layout.cornerRadius, transform: nil))
         context.clip()
-        context.setFillColor(Palette.emptyMap)
+        context.setFillColor(colors.emptyMap)
         context.fill(pane)
 
         let center = CGPoint(x: pane.midX, y: pane.midY)
@@ -146,7 +181,7 @@ final class DashRenderer {
             }
             drawDot(at: center, context: context)
         } else {
-            drawText("กำลังหาตำแหน่ง", font: bodyFont, color: Palette.secondary,
+            drawText("กำลังหาตำแหน่ง", font: bodyFont, color: colors.secondary,
                      at: CGPoint(x: center.x, y: center.y + 9), alignment: .center, context: context)
         }
         context.restoreGState()
@@ -155,52 +190,52 @@ final class DashRenderer {
     /// Apple Maps' location puck: a blue dot in a white ring.
     private func drawDot(at point: CGPoint, context: CGContext) {
         context.saveGState()
-        context.setShadow(offset: .zero, blur: 8, color: Palette.shadow)
-        context.setFillColor(Palette.label)
+        context.setShadow(offset: .zero, blur: 8, color: colors.shadow)
+        context.setFillColor(Self.white)
         context.fillEllipse(in: CGRect(x: point.x - 14, y: point.y - 14, width: 28, height: 28))
         context.restoreGState()
-        context.setFillColor(Palette.blue)
+        context.setFillColor(colors.blue)
         context.fillEllipse(in: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20))
     }
 
     private func drawClockCard(_ scene: DashScene, in rect: CGRect, context: CGContext) {
-        drawCard(rect, color: Palette.card, context: context)
+        drawCard(rect, color: colors.card, context: context)
         let left = rect.minX + Layout.cardPadding
-        drawText(timeFormatter.string(from: scene.date), font: clockFont, color: Palette.label,
+        drawText(timeFormatter.string(from: scene.date), font: clockFont, color: colors.label,
                  at: CGPoint(x: left, y: rect.minY + 140), context: context)
-        drawText(dateFormatter.string(from: scene.date), font: bodyFont, color: Palette.secondary,
+        drawText(dateFormatter.string(from: scene.date), font: bodyFont, color: colors.secondary,
                  at: CGPoint(x: left, y: rect.minY + 196), context: context)
     }
 
     private func drawRideCard(_ scene: DashScene, in rect: CGRect, context: CGContext) {
-        drawCard(rect, color: Palette.card, context: context)
+        drawCard(rect, color: colors.card, context: context)
         let left = rect.minX + Layout.cardPadding
 
         drawSymbol("speedometer", at: CGPoint(x: left, y: rect.minY + 26), context: context)
-        drawText("ความเร็ว", font: headingFont, color: Palette.secondary,
+        drawText("ความเร็ว", font: headingFont, color: colors.secondary,
                  at: CGPoint(x: left + 32, y: rect.minY + 46), context: context)
-        let speedEnd = drawText(speedText(scene), font: speedFont, color: Palette.label,
+        let speedEnd = drawText(speedText(scene), font: speedFont, color: colors.label,
                                 at: CGPoint(x: left, y: rect.minY + 142), context: context)
-        drawText("กม./ชม.", font: bodyFont, color: Palette.secondary,
+        drawText("กม./ชม.", font: bodyFont, color: colors.secondary,
                  at: CGPoint(x: speedEnd + 12, y: rect.minY + 142), context: context)
 
         let rowBaseline = rect.minY + 204
         let vehicle = scene.vehicle
         guard vehicle.connected else {
             drawSymbol("bolt.slash.fill", at: CGPoint(x: left, y: rowBaseline - 24), context: context)
-            drawText("รถยังไม่เชื่อม Bluetooth", font: bodyFont, color: Palette.secondary,
+            drawText("รถยังไม่เชื่อม Bluetooth", font: bodyFont, color: colors.secondary,
                      at: CGPoint(x: left + 36, y: rowBaseline), context: context)
             return
         }
         var x = left
         if let voltage = vehicle.voltage {
             drawSymbol(Self.batterySymbol(voltage), at: CGPoint(x: x, y: rowBaseline - 22), context: context)
-            x = drawText(String(format: "%.1f V", voltage), font: bodyStrongFont, color: Palette.label,
+            x = drawText(String(format: "%.1f V", voltage), font: bodyStrongFont, color: colors.label,
                          at: CGPoint(x: x + 44, y: rowBaseline), context: context) + 28
         }
         if let locked = vehicle.locked {
             drawSymbol(locked ? "lock.fill" : "lock.open.fill", at: CGPoint(x: x, y: rowBaseline - 24), context: context)
-            drawText(locked ? "ล็อกอยู่" : "ปลดล็อก", font: bodyFont, color: Palette.label,
+            drawText(locked ? "ล็อกอยู่" : "ปลดล็อก", font: bodyFont, color: colors.label,
                      at: CGPoint(x: x + 30, y: rowBaseline), context: context)
         }
     }
@@ -208,7 +243,7 @@ final class DashRenderer {
     // MARK: Guidance
 
     private func drawGuidance(_ scene: DashScene, _ navigation: DashScene.Navigation, context: CGContext) {
-        context.setFillColor(Palette.emptyMap)
+        context.setFillColor(colors.emptyMap)
         context.fill(CGRect(origin: .zero, size: size))
         let puck = Layout.guidancePuck
 
@@ -229,7 +264,7 @@ final class DashRenderer {
             context.restoreGState()
             drawArrowPuck(at: puck, context: context)
         } else {
-            drawText("กำลังหาตำแหน่ง", font: bodyFont, color: Palette.secondary,
+            drawText("กำลังหาตำแหน่ง", font: bodyFont, color: colors.secondary,
                      at: CGPoint(x: puck.x, y: puck.y), alignment: .center, context: context)
         }
 
@@ -252,11 +287,11 @@ final class DashRenderer {
         context.setLineCap(.round)
         context.setLineJoin(.round)
         context.addPath(path)
-        context.setStrokeColor(Palette.routeCasing)
+        context.setStrokeColor(colors.routeCasing)
         context.setLineWidth(22)
         context.strokePath()
         context.addPath(path)
-        context.setStrokeColor(Palette.blue)
+        context.setStrokeColor(colors.blue)
         context.setLineWidth(15)
         context.strokePath()
     }
@@ -264,11 +299,11 @@ final class DashRenderer {
     /// The driving puck: a white arrow pointing the way we face, on blue in a white ring.
     private func drawArrowPuck(at point: CGPoint, context: CGContext) {
         context.saveGState()
-        context.setShadow(offset: .zero, blur: 10, color: Palette.shadow)
-        context.setFillColor(Palette.label)
+        context.setShadow(offset: .zero, blur: 10, color: colors.shadow)
+        context.setFillColor(Self.white)
         context.fillEllipse(in: CGRect(x: point.x - 24, y: point.y - 24, width: 48, height: 48))
         context.restoreGState()
-        context.setFillColor(Palette.blue)
+        context.setFillColor(colors.blue)
         context.fillEllipse(in: CGRect(x: point.x - 20, y: point.y - 20, width: 40, height: 40))
         let arrow = CGMutablePath()
         arrow.move(to: CGPoint(x: point.x, y: point.y - 12))
@@ -277,13 +312,13 @@ final class DashRenderer {
         arrow.addLine(to: CGPoint(x: point.x - 10, y: point.y + 11))
         arrow.closeSubpath()
         context.addPath(arrow)
-        context.setFillColor(Palette.label)
+        context.setFillColor(Self.white)
         context.fillPath()
     }
 
     private func drawManeuverCard(_ navigation: DashScene.Navigation, context: CGContext) {
         let rect = CGRect(x: Layout.margin, y: Layout.margin, width: Layout.guidanceCardWidth, height: 196)
-        drawCard(rect, color: Palette.cardOverMap, context: context)
+        drawCard(rect, color: colors.cardOverMap, context: context)
         let left = rect.minX + 26
         let maxWidth = rect.width - 52
 
@@ -300,22 +335,22 @@ final class DashRenderer {
             symbol = navigation.maneuver.symbol
             headline = navigation.distanceToManeuver.map(DashFormat.distance) ?? "ถึงแล้ว"
         }
-        if let image = symbols[symbol] {
+        if let image = symbols[Self.symbolKey(symbol, style)] {
             // Centre the arrow in an 84-point box so every manoeuvre sits the same.
             let box = CGRect(x: left, y: rect.minY + 24, width: 84, height: 84)
             drawImage(image, in: CGRect(x: box.midX - CGFloat(image.width) / 2, y: box.midY - CGFloat(image.height) / 2,
                                         width: CGFloat(image.width), height: CGFloat(image.height)), context: context)
         }
-        drawText(headline, font: maneuverDistanceFont, color: Palette.label,
+        drawText(headline, font: maneuverDistanceFont, color: colors.label,
                  at: CGPoint(x: left + 104, y: rect.minY + 88), maxWidth: maxWidth - 104, context: context)
-        drawText(navigation.instruction, font: instructionFont, color: Palette.label,
+        drawText(navigation.instruction, font: instructionFont, color: colors.label,
                  at: CGPoint(x: left, y: rect.minY + 160), maxWidth: maxWidth, context: context)
     }
 
     private func drawArrivalCard(_ navigation: DashScene.Navigation, context: CGContext) {
         let rect = CGRect(x: Layout.margin, y: size.height - Layout.margin - 100,
                           width: Layout.guidanceCardWidth, height: 100)
-        drawCard(rect, color: Palette.cardOverMap, context: context)
+        drawCard(rect, color: colors.cardOverMap, context: context)
         var columns: [(String, String)] = []
         if let arrival = navigation.arrival { columns.append((timeFormatter.string(from: arrival), "ถึง")) }
         if let time = navigation.remainingTime {
@@ -329,21 +364,21 @@ final class DashRenderer {
         let columnWidth = (rect.width - 40) / 3
         for (index, column) in columns.enumerated() {
             let x = rect.minX + 26 + CGFloat(index) * columnWidth
-            drawText(column.0, font: etaValueFont, color: Palette.label, at: CGPoint(x: x, y: rect.minY + 52), context: context)
-            drawText(column.1, font: captionFont, color: Palette.secondary, at: CGPoint(x: x, y: rect.minY + 82), context: context)
+            drawText(column.0, font: etaValueFont, color: colors.label, at: CGPoint(x: x, y: rect.minY + 52), context: context)
+            drawText(column.1, font: captionFont, color: colors.secondary, at: CGPoint(x: x, y: rect.minY + 82), context: context)
         }
     }
 
     private func drawTimePill(_ scene: DashScene, context: CGContext) {
         let rect = CGRect(x: size.width - Layout.margin - 176, y: Layout.margin, width: 176, height: 58)
-        drawCard(rect, color: Palette.cardOverMap, radius: 29, context: context)
+        drawCard(rect, color: colors.cardOverMap, radius: 29, context: context)
         let time = timeFormatter.string(from: scene.date)
         if scene.vehicle.connected, let voltage = scene.vehicle.voltage {
             drawSymbol(Self.batterySymbol(voltage), at: CGPoint(x: rect.minX + 20, y: rect.minY + 17), context: context)
-            drawText(time, font: pillTimeFont, color: Palette.label,
+            drawText(time, font: pillTimeFont, color: colors.label,
                      at: CGPoint(x: rect.maxX - 20, y: rect.minY + 39), alignment: .right, context: context)
         } else {
-            drawText(time, font: pillTimeFont, color: Palette.label,
+            drawText(time, font: pillTimeFont, color: colors.label,
                      at: CGPoint(x: rect.midX, y: rect.minY + 39), alignment: .center, context: context)
         }
     }
@@ -352,11 +387,11 @@ final class DashRenderer {
         let diameter: CGFloat = 116
         let rect = CGRect(x: size.width - Layout.margin - diameter, y: size.height - Layout.margin - diameter,
                           width: diameter, height: diameter)
-        context.setFillColor(Palette.cardOverMap)
+        context.setFillColor(colors.cardOverMap)
         context.fillEllipse(in: rect)
-        drawText(speedText(scene), font: pillSpeedFont, color: Palette.label,
+        drawText(speedText(scene), font: pillSpeedFont, color: colors.label,
                  at: CGPoint(x: rect.midX, y: rect.midY + 12), alignment: .center, context: context)
-        drawText("กม./ชม.", font: tinyFont, color: Palette.secondary,
+        drawText("กม./ชม.", font: tinyFont, color: colors.secondary,
                  at: CGPoint(x: rect.midX, y: rect.midY + 36), alignment: .center, context: context)
     }
 
@@ -412,7 +447,7 @@ final class DashRenderer {
     }
 
     private func drawSymbol(_ name: String, at topLeft: CGPoint, context: CGContext) {
-        guard let image = symbols[name] else { return }
+        guard let image = symbols[Self.symbolKey(name, style)] else { return }
         drawImage(image, in: CGRect(origin: topLeft, size: CGSize(width: image.width, height: image.height)),
                   context: context)
     }

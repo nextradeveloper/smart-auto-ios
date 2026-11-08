@@ -70,6 +70,8 @@ final class DashNavigator: ObservableObject {
         }
         request.destination = destination.mapItem
         request.transportType = .automobile
+        request.highwayPreference = DashSettings.avoidHighways ? .avoid : .any
+        request.tollPreference = DashSettings.avoidTolls ? .avoid : .any
         let response = try await MKDirections(request: request).calculate()
         guard let route = response.routes.first else { throw ZontesError.message("ไม่พบเส้นทางไปยังจุดหมายนี้") }
         return route
@@ -85,7 +87,8 @@ final class DashNavigator: ObservableObject {
         status = .guiding
         RecentDestinations.add(destination)
         recents = RecentDestinations.load()
-        log("Guidance to \"\(destination.name)\": \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min, \(built.steps.count) steps.")
+        log("Guidance to \"\(destination.name)\": \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min, " +
+            "\(built.steps.count) steps, avoid highways \(DashSettings.avoidHighways), tolls \(DashSettings.avoidTolls).")
         onRoute?(built)
     }
 

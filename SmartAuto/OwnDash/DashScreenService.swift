@@ -13,6 +13,15 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var isRunning = false
     @Published private(set) var state: BroadcastState = .idle
     @Published private(set) var message = ""
+    /// What the dash shows, a few times a second, for the app's own view of it.
+    @Published private(set) var preview: CGImage?
+
+    /// The app is showing the preview; frames are only copied for it while it is visible and the
+    /// app is in front.
+    var previewEnabled = false {
+        didSet { updatePreview() }
+    }
+    private var appActive = true
 
     let navigator = DashNavigator()
     let maps = DashMapProvider()
@@ -73,10 +82,17 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
             }
         }
         loop.onAccessUnit = { [weak dash] accessUnit in dash?.push(accessUnit) }
+        loop.onPreview = { [weak self] image in
+            Task { @MainActor in self?.preview = image }
+        }
         self.loop = loop
         self.dash = dash
         watchPhoneState()
         refreshScene()
+        updatePreview()
+        if let known = lastKnownLocation {
+            maps.showSaved(for: known)
+        }
         loop.start()
         dash.start()
         isRunning = true
@@ -105,7 +121,12 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         locationManager.stopUpdatingLocation()
         locationManager.allowsBackgroundLocationUpdates = false
         isRunning = false
+        preview = nil
         setState(.stopped, "")
+    }
+
+    private func updatePreview() {
+        loop?.previewEnabled = previewEnabled && appActive
     }
 
     /// Asks for location permission if needed and a fresh fix, for search and routing.
@@ -153,6 +174,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     }
 
     private func refreshScene() {
+        let style = DashSettings.currentStyle()
+        store.set(style: style)
+        maps.set(style: style)
         store.set(vehicle: vehicleSource?() ?? DashScene.Vehicle())
         store.set(navigation: navigator.sceneNavigation())
         if !navigator.isNavigating { maps.set(mode: .overview) }
@@ -171,6 +195,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
                 Task { @MainActor in
                     guard let self else { return }
                     self.log("\(line) Frames so far: \(self.dash?.framesPushed ?? 0).")
+                    if name == UIApplication.didEnterBackgroundNotification { self.appActive = false }
+                    if name == UIApplication.willEnterForegroundNotification { self.appActive = true }
+                    self.updatePreview()
                 }
             })
         }
@@ -182,6 +209,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         store.set(location: location)
         navigator.update(with: location)
         maps.set(mode: navigator.isNavigating ? .guidance : .overview)
+        maps.showSaved(for: location)
         maps.update(for: location)
         store.set(navigation: navigator.sceneNavigation())
     }
@@ -212,6 +240,12 @@ final class DashFrameLoop {
     private static let keyFrameEverySeconds = 2
 
     var onAccessUnit: ((Data) -> Void)?
+    /// A copy of the frame, five times a second, while previewEnabled.
+    var onPreview: ((CGImage) -> Void)?
+    var previewEnabled: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return previewOn }
+        set { lock.lock(); previewOn = newValue; lock.unlock() }
+    }
 
     private let encoder: SoftwareVideoEncoder
     private let context: CGContext
@@ -223,6 +257,7 @@ final class DashFrameLoop {
 
     private let lock = NSLock()
     private var keyFrameRequested = true // guarded by `lock`
+    private var previewOn = false // guarded by `lock`
 
     // Render queue only.
     private var motion = DashMotion()
@@ -280,6 +315,9 @@ final class DashFrameLoop {
         var scene = store.scene()
         (scene.position, scene.course) = motion.step(latest: scene.location, now: scene.date)
         renderer.draw(scene, in: context)
+        if frameIndex % 4 == 0, previewEnabled, let image = context.makeImage() {
+            onPreview?(image)
+        }
         let encodeStart = DispatchTime.now().uptimeNanoseconds
         guard let accessUnit = encoder.encode(context, keyFrame: keyFrame) else {
             failures += 1

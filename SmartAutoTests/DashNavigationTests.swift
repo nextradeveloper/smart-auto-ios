@@ -81,4 +81,26 @@ final class DashNavigationTests: XCTestCase {
         XCTAssertLessThan(moved, 11)
         XCTAssertGreaterThan(try! XCTUnwrap(position).longitude, start.longitude, "east, along the course")
     }
+
+    func testParkedPositionIgnoresGPSDrift() {
+        let time = Date()
+        func fix(_ north: Double, _ seconds: Double) -> CLLocation {
+            CLLocation(coordinate: start.offsetNorth(north), altitude: 0, horizontalAccuracy: 10,
+                       verticalAccuracy: 10, course: -1, speed: 0, timestamp: time.addingTimeInterval(seconds))
+        }
+        var motion = DashMotion()
+        let first = motion.step(latest: fix(0, 0), now: time).0
+        var shown: CLLocationCoordinate2D?
+        for frame in 1 ... 40 { // two seconds of drift, 6 m either way
+            let drift = frame % 2 == 0 ? 6.0 : -6.0
+            shown = motion.step(latest: fix(drift, Double(frame / 20)), now: time.addingTimeInterval(Double(frame) / 20)).0
+        }
+        XCTAssertEqual(DashRoute.meters(try! XCTUnwrap(first), try! XCTUnwrap(shown)), 0, accuracy: 0.01)
+    }
+}
+
+private extension CLLocationCoordinate2D {
+    func offsetNorth(_ meters: Double) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude + meters / 110_540, longitude: longitude)
+    }
 }

@@ -138,3 +138,12 @@ the map to our heading (2048 px square pictures at 1.25 m/px) and draws the rout
 every 300 m along the first 15 km are made when guidance starts and kept in Caches/DashMaps for when
 the phone is locked. Movement between GPS fixes is carried forward and eased (`DashMotion`) at
 20 fps; without that the map jumped once a second.
+
+Field log 2026-11-08 17:00 (photos on the bike): 20 fps steady, draw 3-20 ms, encode 2-6 ms, so the
+stutter was not the encoder. Parked, GPS wandered a few metres a second and the map followed it;
+`DashMotion` now holds still under the fix's accuracy when the speed is under 0.8 m/s. The first
+map snapshot took 107 s and blocked all others: snapshots now give up after 12 s, and the last
+overview picture is kept on disk (per theme) and shown at once on start. Added: map theme (dark /
+light / follow the iPhone), route options (avoid highways, avoid tolls via
+`MKDirections.Request.highwayPreference/tollPreference`), and the จอรถ tab shows a live preview of
+the dash with the search bar, recent places and the turn card under it.
