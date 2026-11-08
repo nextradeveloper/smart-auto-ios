@@ -48,11 +48,12 @@ final class SoftwareVideoEncoder {
         softh264_destroy(encoder)
     }
 
-    /// The bitmap context to draw a frame in: XRGB, top row first in memory.
+    /// The bitmap context to draw a frame in: sRGB XRGB, top row first in memory. sRGB so colours
+    /// given in sRGB reach the encoder unconverted.
     func makeContext() -> CGContext? {
         CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
         )
     }

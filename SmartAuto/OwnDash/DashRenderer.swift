@@ -11,17 +11,23 @@ import UIKit
 final class DashRenderer {
     let size: CGSize
 
-    // Apple's dark-mode system colours.
+    // Apple's dark-mode system colours, in sRGB like the frame they are drawn into.
     private enum Palette {
-        static let background = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
-        static let card = CGColor(red: 0.110, green: 0.110, blue: 0.118, alpha: 1)        // #1C1C1E
-        static let emptyMap = CGColor(red: 0.067, green: 0.071, blue: 0.078, alpha: 1)    // #111214
-        static let label = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-        static let secondary = CGColor(red: 0.557, green: 0.557, blue: 0.576, alpha: 1)   // #8E8E93
-        static let blue = CGColor(red: 0.039, green: 0.518, blue: 1, alpha: 1)            // #0A84FF
-        static let green = CGColor(red: 0.188, green: 0.820, blue: 0.345, alpha: 1)       // #30D158
-        static let yellow = CGColor(red: 1, green: 0.839, blue: 0.039, alpha: 1)          // #FFD60A
-        static let red = CGColor(red: 1, green: 0.271, blue: 0.227, alpha: 1)             // #FF453A
+        static let background = srgb(0, 0, 0, 1)
+        static let card = srgb(0.110, 0.110, 0.118, 1)        // #1C1C1E
+        static let emptyMap = srgb(0.067, 0.071, 0.078, 1)    // #111214
+        static let label = srgb(1, 1, 1, 1)
+        static let secondary = srgb(0.557, 0.557, 0.576, 1)   // #8E8E93
+        static let blue = srgb(0.039, 0.518, 1, 1)            // #0A84FF
+        static let green = srgb(0.188, 0.820, 0.345, 1)       // #30D158
+        static let yellow = srgb(1, 0.839, 0.039, 1)          // #FFD60A
+        static let red = srgb(1, 0.271, 0.227, 1)             // #FF453A
+
+        private static func srgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat) -> CGColor {
+            let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            return CGColor(colorSpace: space, components: [red, green, blue, alpha])
+                ?? CGColor(red: red, green: green, blue: blue, alpha: alpha)
+        }
     }
 
     private enum Layout {
