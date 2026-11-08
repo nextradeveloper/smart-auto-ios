@@ -51,7 +51,7 @@ int softh264_encode(SoftH264 *encoder,
     H264E_run_param_t run;
     memset(&run, 0, sizeof run);
     run.frame_type = forceKey ? H264E_FRAME_TYPE_KEY : H264E_FRAME_TYPE_P;
-    run.encode_speed = 6; // 0 = best quality, 10 = fastest
+    run.encode_speed = 8; // 0 = best quality, 10 = fastest; 8 keeps 20 fps at 1280x528
     run.desired_frame_bytes = encoder->frameBytes;
     run.qp_min = 18;
     run.qp_max = 45;

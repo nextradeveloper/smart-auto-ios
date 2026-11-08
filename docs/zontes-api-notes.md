@@ -130,3 +130,11 @@ the left, time and ride/bike cards on the right) at 12 fps, opened from the new 
 Bluetooth monitor now lives in `MainShellView` so the dash can show battery and lock state. The log
 records whether `MKMapSnapshotter` renders with the phone locked ("Map snapshot ok/failed (phone
 locked)"), which decides how much round B (navigation) relies on maps prepared in advance.
+
+Round B (2026-11-08): place search (`MKLocalSearchCompleter`) and turn-by-turn guidance on the
+dash (`DashNavigation.swift` logic, `DashNavigator.swift` state). Apple's route steps carry no turn
+type, so the arrow comes from the change of heading 25 m either side of each step. Guidance turns
+the map to our heading (2048 px square pictures at 1.25 m/px) and draws the route over it; pictures
+every 300 m along the first 15 km are made when guidance starts and kept in Caches/DashMaps for when
+the phone is locked. Movement between GPS fixes is carried forward and eased (`DashMotion`) at
+20 fps; without that the map jumped once a second.

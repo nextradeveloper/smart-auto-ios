@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MapKit
 import UIKit
 
 /// Smart Auto's own screen on the dash: drawn here, encoded on the CPU, kept going behind the lock
@@ -13,12 +14,18 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var state: BroadcastState = .idle
     @Published private(set) var message = ""
 
+    let navigator = DashNavigator()
+    let maps = DashMapProvider()
+
     /// Bike state for the ride card; polled once a second while running.
     var vehicleSource: (@MainActor () -> DashScene.Vehicle)?
 
+    /// The best known position, for searching nearby and routing before the screen is on.
+    var lastKnownLocation: CLLocation? { lastLocation ?? locationManager.location }
+
     private let store = DashSceneStore()
-    private let maps = DashMapProvider()
     private let locationManager = CLLocationManager()
+    private var lastLocation: CLLocation?
     private var dash: DashSession?
     private var loop: DashFrameLoop?
     private var statusTimer: Timer?
@@ -33,11 +40,16 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         locationManager.pausesLocationUpdatesAutomatically = false
         let store = store
         maps.onMap = { store.set(map: $0) }
+        navigator.onRoute = { [weak self] route in
+            self?.maps.prepare(along: route)
+        }
     }
 
     private func log(_ text: String) {
         EventLog.record("OWNDASH", text)
     }
+
+    // MARK: Screen
 
     func start() {
         guard !isRunning else { return }
@@ -50,13 +62,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
             return
         }
 
-        if locationManager.authorizationStatus == .notDetermined {
-            locationManager.requestWhenInUseAuthorization()
-        }
-        locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.showsBackgroundLocationIndicator = true
-        locationManager.startUpdatingLocation()
-
+        startLocation()
         let dash = DashSession(profile: profile) { EventLog.record("DASH", $0) }
         dash.onEvent = { [weak self, weak loop] event in
             switch event {
@@ -70,13 +76,13 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         self.loop = loop
         self.dash = dash
         watchPhoneState()
-        pollVehicle()
+        refreshScene()
         loop.start()
         dash.start()
         isRunning = true
         setState(.connecting, "กำลังเชื่อมต่อจอรถ")
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pollVehicle() }
+            Task { @MainActor in self?.refreshScene() }
         }
     }
 
@@ -91,11 +97,53 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         dash?.stop()
         loop = nil
         dash = nil
+        navigator.stop()
         maps.reset()
+        maps.set(mode: .overview)
+        store.set(map: nil)
+        store.set(navigation: nil)
         locationManager.stopUpdatingLocation()
         locationManager.allowsBackgroundLocationUpdates = false
         isRunning = false
         setState(.stopped, "")
+    }
+
+    /// Asks for location permission if needed and a fresh fix, for search and routing.
+    func prepareLocation() {
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        } else if !isRunning {
+            locationManager.requestLocation()
+        }
+    }
+
+    // MARK: Guidance
+
+    /// Starts guidance, and the dash screen with it if it is not on yet.
+    func startNavigation(to destination: DashDestination, route: MKRoute) {
+        navigator.start(destination, route: route)
+        maps.set(mode: .guidance)
+        if !isRunning { start() }
+        if let lastLocation { maps.update(for: lastLocation) }
+        refreshScene()
+    }
+
+    func stopNavigation() {
+        navigator.stop()
+        maps.set(mode: .overview)
+        if let lastLocation { maps.update(for: lastLocation) }
+        refreshScene()
+    }
+
+    // MARK: State
+
+    private func startLocation() {
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        }
+        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.showsBackgroundLocationIndicator = true
+        locationManager.startUpdatingLocation()
     }
 
     private func setState(_ newState: BroadcastState, _ text: String) {
@@ -104,8 +152,10 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         message = text
     }
 
-    private func pollVehicle() {
+    private func refreshScene() {
         store.set(vehicle: vehicleSource?() ?? DashScene.Vehicle())
+        store.set(navigation: navigator.sceneNavigation())
+        if !navigator.isNavigating { maps.set(mode: .overview) }
     }
 
     private func watchPhoneState() {
@@ -126,15 +176,21 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         }
     }
 
+    private func handle(_ location: CLLocation) {
+        lastLocation = location
+        guard isRunning else { return }
+        store.set(location: location)
+        navigator.update(with: location)
+        maps.set(mode: navigator.isNavigating ? .guidance : .overview)
+        maps.update(for: location)
+        store.set(navigation: navigator.sceneNavigation())
+    }
+
     // MARK: CLLocationManagerDelegate
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last, location.horizontalAccuracy >= 0 else { return }
-        Task { @MainActor in
-            guard self.isRunning else { return }
-            self.store.set(location: location)
-            self.maps.update(for: location)
-        }
+        Task { @MainActor in self.handle(location) }
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -150,8 +206,8 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
 /// Draws and encodes the dash screen on its own queue at a steady rate.
 final class DashFrameLoop {
-    static let frameRate = 12
-    static let bitRate = 1_800_000
+    static let frameRate = 20
+    static let bitRate = 3_000_000
     /// A key frame at least this often, so a dash that missed one recovers quickly.
     private static let keyFrameEverySeconds = 2
 
@@ -162,13 +218,14 @@ final class DashFrameLoop {
     private let renderer: DashRenderer
     private let store: DashSceneStore
     private let log: (String) -> Void
-    private let queue = DispatchQueue(label: "smartauto.dash.render", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "smartauto.dash.render", qos: .userInteractive)
     private var timer: DispatchSourceTimer?
 
     private let lock = NSLock()
     private var keyFrameRequested = true // guarded by `lock`
 
     // Render queue only.
+    private var motion = DashMotion()
     private var frameIndex = 0
     private var lastKeyFrame = 0
     private var failures = 0
@@ -195,7 +252,7 @@ final class DashFrameLoop {
 
     func start() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(1000 / Self.frameRate), leeway: .milliseconds(5))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(1000 / Self.frameRate), leeway: .milliseconds(3))
         timer.setEventHandler { [weak self] in self?.tick() }
         self.timer = timer
         timer.resume()
@@ -220,7 +277,9 @@ final class DashFrameLoop {
         if frameIndex - lastKeyFrame >= Self.frameRate * Self.keyFrameEverySeconds { keyFrame = true }
 
         let drawStart = DispatchTime.now().uptimeNanoseconds
-        renderer.draw(store.scene(), in: context)
+        var scene = store.scene()
+        (scene.position, scene.course) = motion.step(latest: scene.location, now: scene.date)
+        renderer.draw(scene, in: context)
         let encodeStart = DispatchTime.now().uptimeNanoseconds
         guard let accessUnit = encoder.encode(context, keyFrame: keyFrame) else {
             failures += 1

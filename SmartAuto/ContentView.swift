@@ -741,10 +741,15 @@ private struct WheelButton: View {
 /// locked, and screen share as the alternative.
 private struct DashTabView: View {
     @ObservedObject var dashScreen: DashScreenService
+    @ObservedObject private var navigator: DashNavigator
+    @ObservedObject private var maps: DashMapProvider
     @StateObject private var launcher = BroadcastLauncher()
+    @State private var showsSearch = false
 
     init(dashScreen: DashScreenService) {
         self.dashScreen = dashScreen
+        navigator = dashScreen.navigator
+        maps = dashScreen.maps
     }
 
     var body: some View {
@@ -783,6 +788,47 @@ private struct DashTabView: View {
                     Text("แสดงแผนที่ เวลา ความเร็ว และสถานะรถบนจอรถ ทำงานต่อได้แม้ล็อกโทรศัพท์ ต่อ Wi-Fi ของรถ (ZT_…) ก่อน และควรเสียบชาร์จระหว่างขี่")
                 }
 
+                Section {
+                    if let destination = navigator.destination {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label {
+                                Text(destination.name)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                            } icon: {
+                                Image(systemName: "location.fill")
+                                    .foregroundStyle(.blue)
+                            }
+                            Text(guidanceText)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            if let preparing = maps.preparing {
+                                ProgressView(value: Double(preparing.done), total: Double(max(preparing.total, 1))) {
+                                    Text("เตรียมแผนที่ตามเส้นทาง \(preparing.done)/\(preparing.total)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        Button(role: .destructive) {
+                            dashScreen.stopNavigation()
+                        } label: {
+                            Label("จบการนำทาง", systemImage: "xmark.circle.fill")
+                        }
+                    } else {
+                        Button {
+                            showsSearch = true
+                        } label: {
+                            Label("ค้นหาสถานที่", systemImage: "magnifyingglass")
+                        }
+                    }
+                } header: {
+                    Text("นำทาง")
+                } footer: {
+                    Text("เลือกปลายทางแล้วล็อกโทรศัพท์ได้เลย จอรถจะบอกทางเลี้ยว ระยะ และเวลาถึง เปิดแอปไว้จนแผนที่ตามเส้นทางเตรียมเสร็จ")
+                }
+
                 Section("ตัวเลือกอื่น") {
                     Button {
                         launcher.launch()
@@ -802,6 +848,23 @@ private struct DashTabView: View {
             .scrollContentBackground(.hidden)
             .background(Color.black)
             .navigationTitle("จอรถ")
+            .sheet(isPresented: $showsSearch) {
+                DashDestinationSearch(dashScreen: dashScreen, navigator: navigator)
+            }
+        }
+    }
+
+    private var guidanceText: String {
+        switch navigator.status {
+        case .rerouting: return "กำลังหาเส้นทางใหม่"
+        case .arrived: return "ถึงจุดหมายแล้ว"
+        default:
+            guard let progress = navigator.progress else { return "กำลังเริ่มนำทาง" }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "HH:mm"
+            let arrival = formatter.string(from: Date().addingTimeInterval(progress.remainingTime))
+            return "ถึง \(arrival) · \(DashFormat.distance(progress.remainingDistance))"
         }
     }
 
