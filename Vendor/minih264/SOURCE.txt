@@ -1,0 +1,5 @@
+minih264e.h from https://github.com/lieff/minih264 (master, last commit 2020-12-10), CC0-1.0.
+Local change: the Apple arm64 branch near line 5600 called vtbl2q_u8, which is not an ARM
+intrinsic and does not compile with current Xcode; it is vqtbl2_u8 (uint8x16x2_t table,
+uint8x8_t index, uint8x8_t result), which is what that code means.
+SoftH264.c/.h and module.modulemap are Smart Auto's.

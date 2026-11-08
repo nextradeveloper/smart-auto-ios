@@ -26,6 +26,7 @@ targets:
       - path: Vendor/minih264
         excludes:
           - module.modulemap
+          - SOURCE.txt
         compilerFlags:
           - -w
           - -O3

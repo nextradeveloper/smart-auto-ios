@@ -5601,10 +5601,10 @@ static int quantize_neon(quant_t *q, int mode, const uint16_t *qdat, int zmask)
                 uint8x16x2_t vlut;
                 vlut.val[0] = vreinterpretq_u8_s16(vcombine_s16(d22, d23));
                 vlut.val[1] = vreinterpretq_u8_s16(vcombine_s16(d24, d25));
-                vst1_s16(q->qv + 0, d4 = vreinterpret_s16_u8(vtbl2q_u8(vlut, vget_low_u8(q8))));
-                vst1_s16(q->qv + 4, d5 = vreinterpret_s16_u8(vtbl2q_u8(vlut, vget_high_u8(q8))));
-                vst1_s16(q->qv + 8, d6 = vreinterpret_s16_u8(vtbl2q_u8(vlut, vget_low_u8(q9))));
-                vst1_s16(q->qv +12, d7 = vreinterpret_s16_u8(vtbl2q_u8(vlut, vget_high_u8(q9))));
+                vst1_s16(q->qv + 0, d4 = vreinterpret_s16_u8(vqtbl2_u8(vlut, vget_low_u8(q8))));
+                vst1_s16(q->qv + 4, d5 = vreinterpret_s16_u8(vqtbl2_u8(vlut, vget_high_u8(q8))));
+                vst1_s16(q->qv + 8, d6 = vreinterpret_s16_u8(vqtbl2_u8(vlut, vget_low_u8(q9))));
+                vst1_s16(q->qv +12, d7 = vreinterpret_s16_u8(vqtbl2_u8(vlut, vget_high_u8(q9))));
 #else
                 uint8x8x4_t vlut;
                 vlut.val[0] = vreinterpret_u8_s16(d22);
