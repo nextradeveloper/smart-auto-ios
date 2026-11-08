@@ -38,6 +38,7 @@ final class DashRendererTests: XCTestCase {
         var scene = DashScene()
         scene.position = here
         scene.course = 0 // facing north: the route ahead goes straight up the screen
+        scene.threeD = false
         scene.navigation = DashScene.Navigation(
             maneuver: .right, distanceToManeuver: 350, instruction: "เลี้ยวขวาเข้าสู่ ถนนทดสอบ",
             arrival: Date().addingTimeInterval(600), remainingDistance: 4200, remainingTime: 600,
