@@ -180,12 +180,13 @@ final class VideoPipeline {
     // MARK: Conversion
 
     /// Clockwise quarter turns that make the buffer upright. ReplayKit tags a landscape screen
-    /// as .left/.right; the setting flips the result if this guess is the wrong way round.
+    /// as .left/.right; on the 368G (2026-11-08) .right needed a counter-clockwise turn, the
+    /// opposite of the first guess, which showed landscape upside down. The setting still flips it.
     private func quarterTurns(for orientation: CGImagePropertyOrientation) -> Int {
         var turns: Int
         switch orientation {
-        case .right, .rightMirrored: turns = 1
-        case .left, .leftMirrored: turns = 3
+        case .right, .rightMirrored: turns = 3
+        case .left, .leftMirrored: turns = 1
         case .down, .downMirrored: turns = 2
         default: turns = 0
         }

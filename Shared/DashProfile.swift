@@ -41,7 +41,7 @@ struct DashProfile: Identifiable, Equatable {
 
     static let zontesG = DashProfile(
         id: "zontes_368g_g",
-        title: "Zontes 368G (G) - แนะนำ",
+        title: "Zontes 368G (G)",
         detail: "เหมือนแอป ZONTES ทางการที่สุด: เวอร์ชัน 1.12 (3034) และส่ง supportFunction คืนจอ",
         clientPackage: "tayo.com.ZontesIntelligence",
         clientVersionCode: 3034,
@@ -52,7 +52,7 @@ struct DashProfile: Identifiable, Equatable {
 
     static let zontesH = DashProfile(
         id: "zontes_368g_h",
-        title: "Zontes 368G (H) - ลองอันนี้ก่อน",
+        title: "Zontes 368G (H) - แนะนำ",
         detail: "ตัวตนแอป ZONTES และบอกจอทุก 1 วินาทีว่าแอปเปิดอยู่ (0x20020) ทางช่อง CAR_DATA แบบแอปทางการ",
         clientPackage: "tayo.com.ZontesIntelligence",
         clientVersionCode: 3034,
@@ -98,9 +98,10 @@ struct DashProfile: Identifiable, Equatable {
         supportFunction: 0
     )
 
-    static let all: [DashProfile] = [zontesG, zontesH, zontesI, zontesF, zontesE]
+    /// H first: the profile that paints on the 368G (field log 2026-11-08).
+    static let all: [DashProfile] = [zontesH, zontesI, zontesG, zontesF, zontesE]
 
     static func byID(_ id: String?) -> DashProfile {
-        all.first { $0.id == id } ?? zontesG
+        all.first { $0.id == id } ?? zontesH
     }
 }

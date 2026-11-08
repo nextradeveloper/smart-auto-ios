@@ -721,7 +721,6 @@ private struct WheelButton: View {
 }
 
 private struct CarPlayView: View {
-    @StateObject private var direct = CarPlayDirect()
     @StateObject private var launcher = BroadcastLauncher()
 
     var body: some View {
@@ -734,31 +733,14 @@ private struct CarPlayView: View {
                             .foregroundStyle(.cyan)
                         Text("CarPlay บนหน้าจอรถ")
                             .font(.title2.bold())
-                        Text("เชื่อมต่อ Wi-Fi ของรถก่อน แล้วเลือกวิธีส่งภาพที่เหมาะกับหน้าจอของคุณ")
+                        Text("เชื่อมต่อ Wi-Fi ของรถ (ZT_…) ก่อน แล้วกดแชร์หน้าจอเพื่อส่งภาพจาก iPhone ขึ้นจอรถ")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 8)
                 }
 
-                Section {
-                    Button {
-                        direct.isRunning ? direct.stop() : direct.start()
-                    } label: {
-                        Label(direct.isRunning ? "หยุดส่ง CarPlay" : "ส่ง CarPlay ขึ้นจอรถ", systemImage: direct.isRunning ? "stop.circle.fill" : "car.fill")
-                    }
-                    if !direct.message.isEmpty {
-                        Text(direct.message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("CarPlay โดยตรง")
-                } footer: {
-                    Text("เปิด iCarCast โหมด This iPhone ค้างไว้ แล้วกลับมากดเริ่มส่ง CarPlay")
-                }
-
-                Section("สำรอง: แชร์หน้าจอ") {
+                Section("แชร์หน้าจอ") {
                     Button {
                         launcher.launch()
                     } label: {
@@ -820,7 +802,7 @@ private struct MetricRow: View {
 private struct LegacyToolsView: View {
     @State private var probeRunning = false
     @State private var probeResult: String?
-    @AppStorage("profileID", store: groupDefaults) private var profileID = DashProfile.zontesG.id
+    @AppStorage("profileID", store: groupDefaults) private var profileID = DashProfile.zontesH.id
     @AppStorage("quality", store: groupDefaults) private var quality: VideoQuality = .normal
     @AppStorage("flipPicture", store: groupDefaults) private var flipPicture = false
     @AppStorage("dashAddressOverride", store: groupDefaults) private var dashAddress = ""

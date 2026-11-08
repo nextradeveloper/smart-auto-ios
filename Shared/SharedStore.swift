@@ -72,7 +72,7 @@ enum SharedStore {
     // MARK: Settings (app -> extension)
 
     static var profileID: String {
-        get { defaults.string(forKey: "profileID") ?? DashProfile.zontesG.id }
+        get { defaults.string(forKey: "profileID") ?? DashProfile.zontesH.id }
         set { defaults.set(newValue, forKey: "profileID") }
     }
 
