@@ -242,6 +242,18 @@ enum TripStore {
     static func delete(_ id: UUID) {
         write(summaries().filter { $0.id != id }, to: indexFile)
         try? FileManager.default.removeItem(at: pointsFile(id))
+        try? FileManager.default.removeItem(at: roadsFile(id))
+    }
+
+    /// The roads near the trip from OpenStreetMap, fetched once and kept with it.
+    private static func roadsFile(_ id: UUID) -> URL { folder.appendingPathComponent("\(id.uuidString)-roads.json") }
+
+    static func roads(_ id: UUID) -> [MappedRoad]? {
+        read([MappedRoad].self, from: roadsFile(id))
+    }
+
+    static func saveRoads(_ roads: [MappedRoad], for id: UUID) {
+        write(roads, to: roadsFile(id))
     }
 
     static func saveUnfinished(_ summary: TripSummary, points: [TripPoint]) {
@@ -370,6 +382,8 @@ final class TripRecorder: ObservableObject {
             var named = summary
             named.startName = await Self.placeName(first)
             named.endName = await Self.placeName(last)
+            // The roads too, while there is signal, so the review opens at once.
+            if let roads = try? await TripRoads.fetch(points) { TripStore.saveRoads(roads, for: summary.id) }
             guard named.startName != nil || named.endName != nil else { return }
             TripStore.update(named)
             self.trips = TripStore.summaries()

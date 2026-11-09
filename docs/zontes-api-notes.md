@@ -189,3 +189,10 @@ from the home snapshot feed the dash (ride card, warnings in `RideAlerts`) and t
 every 3 minutes while the dash screen is on. Trips (`SmartAuto/Ride/TripLog.swift`) are recorded
 while the dash screen is on; lean is estimated as atan(speed × yaw rate / g). Fill-ups
 (`FuelLog.swift`) give km per litre from full tank to full tank.
+
+Trip review: Apple's maps give no speed limits to other apps, so after a trip the roads within 30 m
+of it come from OpenStreetMap (Overpass, `way(around:30, line)[highway]`, `out tags geom`), kept as
+`<trip>-roads.json`. `TripRoads` puts each point on its nearest road (grid of ~110 m cells, short
+crossings smoothed out), sums distance and speed per road, and lists stretches over the limit
+(`maxspeed:motorcycle`, `maxspeed`, TH:urban 80, TH:rural 90; the rider's default where none) by
+more than 5 km/h for 5 s or longer.

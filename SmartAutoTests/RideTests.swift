@@ -70,6 +70,41 @@ final class RideTests: XCTestCase {
         XCTAssertEqual(LeanMeter.lean(speed: 20, yawRate: -0.3), -31.4, accuracy: 0.2)
     }
 
+    func testSpeedLimitTags() {
+        XCTAssertEqual(TripRoads.limit(["maxspeed": "80"]), 80)
+        XCTAssertEqual(TripRoads.limit(["maxspeed": "90", "maxspeed:motorcycle": "70"]), 70)
+        XCTAssertEqual(TripRoads.limit(["maxspeed": "TH:urban"]), 80)
+        XCTAssertEqual(TripRoads.limit(["maxspeed": "30 mph"]), 48)
+        XCTAssertNil(TripRoads.limit(["maxspeed": "signals"]))
+        XCTAssertEqual(TripRoads.name(["name:th": "ถนนพหลโยธิน", "ref": "1"]), "ถนนพหลโยธิน (ทล.1)")
+        XCTAssertEqual(TripRoads.name(["ref": "3215"]), "ทางหลวง 3215")
+    }
+
+    /// 15 s at 108 km/h on an 80 road, then 15 s at 72: one stretch over the limit, on that road.
+    func testSpeedingOnARoad() {
+        let road = MappedRoad(name: "ถนนทดสอบ", limit: 80, latitudes: [13.0, 13.02], longitudes: [100.0, 100.0])
+        var points: [TripPoint] = []
+        var latitude = 13.0
+        for second in 0 ..< 30 {
+            let speed = second < 15 ? 30.0 : 20.0
+            points.append(TripPoint(latitude: latitude, longitude: 100.0, time: Double(second), speed: speed))
+            latitude += speed / 110_540
+        }
+        let analysis = TripRoads.analyze(points, roads: [road], assumedLimit: 90)
+        XCTAssertEqual(analysis.speeding.count, 1)
+        XCTAssertEqual(analysis.speeding.first?.road, "ถนนทดสอบ")
+        XCTAssertEqual(analysis.speeding.first?.limit, 80)
+        XCTAssertEqual((analysis.speeding.first?.maxSpeed ?? 0) * 3.6, 108, accuracy: 0.1)
+        XCTAssertEqual(analysis.roads.first?.name, "ถนนทดสอบ")
+        XCTAssertEqual(analysis.roads.first?.distance ?? 0, 15 * 30 + 15 * 20 - 20, accuracy: 40)
+    }
+
+    /// One point on a crossing street between two on the main road belongs to the main road.
+    func testCrossingStreetIsSmoothedOut() {
+        XCTAssertEqual(TripRoads.smooth([0, 0, 1, 0, 0]), [0, 0, 0, 0, 0])
+        XCTAssertEqual(TripRoads.smooth([0, 0, 1, 1, 1, 1]), [0, 0, 1, 1, 1, 1])
+    }
+
     private func fix(_ coordinate: CLLocationCoordinate2D, speed: Double, at time: Date) -> CLLocation {
         CLLocation(coordinate: coordinate, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5,
                    course: 0, speed: speed, timestamp: time)
