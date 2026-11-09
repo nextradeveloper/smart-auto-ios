@@ -196,3 +196,9 @@ of it come from OpenStreetMap (Overpass, `way(around:30, line)[highway]`, `out t
 crossings smoothed out), sums distance and speed per road, and lists stretches over the limit
 (`maxspeed:motorcycle`, `maxspeed`, TH:urban 80, TH:rural 90; the rider's default where none) by
 more than 5 km/h for 5 s or longer.
+
+Speed cameras: `highway=speed_camera` nodes from OpenStreetMap (Overpass), 15 km around us (again
+after 5 km) and within 60 m along each route (`SpeedCameraWatch`). Guiding: the next one on the
+route by distance along it; otherwise within 1 km and 25 degrees of our heading, facing our way
+when `direction` is mapped. Dash pill "กล้อง 450 ม. · 90" (red over the limit), spoken at about
+1 km and 300 m. Thailand's cameras are only partly mapped.

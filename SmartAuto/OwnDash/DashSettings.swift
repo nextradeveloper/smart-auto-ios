@@ -25,6 +25,10 @@ enum DashSettings {
     static let voiceKey = "dash.voice"
     static let mapOnRightKey = "dash.mapOnRight"
     static let recordTripsKey = "ride.recordTrips"
+    static let speedCamerasKey = "dash.speedCameras"
+
+    /// Speed camera warnings on the dash and spoken; on unless turned off.
+    static var speedCameras: Bool { UserDefaults.standard.object(forKey: speedCamerasKey) as? Bool ?? true }
     /// km/h for roads OpenStreetMap has no limit for, in the trip review.
     static let assumedSpeedLimitKey = "ride.assumedSpeedLimit"
 

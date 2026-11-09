@@ -31,6 +31,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     let navigator = DashNavigator()
     let maps = DashMapProvider()
     private let voice = DashVoice()
+    private let cameras = SpeedCameraWatch()
     let trips = TripRecorder()
     /// Fetches the bike's fuel, range and tyres from ZONTES' service: at start, then every 3 minutes.
     var refreshVehicleData: (@MainActor () async -> Void)?
@@ -71,6 +72,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.onMap = { store.set(map: $0) }
         navigator.onRoute = { [weak self] route in
             self?.maps.prepare(along: route)
+            self?.cameras.prepare(along: route)
         }
         navigator.onAnnounce = { [weak self] text in
             self?.voice.announce(text)
@@ -146,6 +148,8 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         dash = nil
         trips.end()
         navigator.stop()
+        cameras.reset()
+        store.set(camera: nil)
         maps.reset()
         maps.set(mode: .overview)
         store.set(map: nil)
@@ -203,6 +207,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     func stopNavigation() {
         navigator.stop()
+        cameras.reset()
         maps.set(mode: .overview)
         if let lastLocation { maps.update(for: lastLocation) }
         refreshScene()
@@ -373,6 +378,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.update(for: location)
         voice.update(status: navigator.status, progress: navigator.progress, route: navigator.route,
                      speed: location.speed, stopsReached: navigator.stopsReached)
+        let camera = cameras.update(location, progress: navigator.progress, guiding: navigator.status == .guiding)
+        store.set(camera: camera.ahead)
+        if let speech = camera.say { voice.announce(speech) }
         store.set(navigation: navigator.sceneNavigation())
     }
 

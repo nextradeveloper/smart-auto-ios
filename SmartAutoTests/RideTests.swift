@@ -105,6 +105,20 @@ final class RideTests: XCTestCase {
         XCTAssertEqual(TripRoads.smooth([0, 0, 1, 1, 1, 1]), [0, 0, 1, 1, 1, 1])
     }
 
+    func testSpeedCameras() {
+        let json = """
+        {"elements":[{"type":"node","id":101,"lat":13.75,"lon":100.5,"tags":{"highway":"speed_camera","maxspeed":"90","direction":"NE"}},
+                     {"type":"node","id":102,"lat":13.76,"lon":100.51,"tags":{"highway":"speed_camera"}}]}
+        """
+        let cameras = SpeedCameraSource.parse(Data(json.utf8))
+        XCTAssertEqual(cameras.count, 2)
+        XCTAssertEqual(cameras.first?.limit, 90)
+        XCTAssertEqual(cameras.first?.direction, 45)
+        XCTAssertNil(cameras.last?.limit)
+        XCTAssertEqual(SpeedCameraSource.direction("270;90"), 270)
+        XCTAssertNil(SpeedCameraSource.direction("forward"))
+    }
+
     private func fix(_ coordinate: CLLocationCoordinate2D, speed: Double, at time: Date) -> CLLocation {
         CLLocation(coordinate: coordinate, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5,
                    course: 0, speed: speed, timestamp: time)

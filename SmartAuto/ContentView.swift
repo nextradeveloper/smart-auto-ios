@@ -804,6 +804,7 @@ private struct DashTabView: View {
     @AppStorage(DashSettings.threeDKey) private var threeD = true
     @AppStorage(DashSettings.autoConnectKey) private var autoConnect = true
     @AppStorage(DashSettings.voiceKey) private var voice = true
+    @AppStorage(DashSettings.speedCamerasKey) private var speedCameras = true
     @AppStorage(DashSettings.mapOnRightKey) private var mapOnRight = false
 
     init(dashScreen: DashScreenService) {
@@ -868,6 +869,7 @@ private struct DashTabView: View {
 
                 Section {
                     Toggle("เสียงนำทาง", isOn: $voice)
+                    Toggle("เตือนกล้องตรวจจับความเร็ว", isOn: $speedCameras)
                     Toggle("เลี่ยงทางด่วน/มอเตอร์เวย์", isOn: $avoidTolls)
                     Toggle("เลี่ยงทางหลวง", isOn: $avoidHighways)
                     Picker("ธีม", selection: $theme) {

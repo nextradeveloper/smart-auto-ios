@@ -127,6 +127,10 @@ final class DashRenderer {
             }
             symbols[Self.symbolKey("alert.warning", style)] =
                 Self.symbol("exclamationmark.triangle.fill", pointSize: 24, color: UIColor(cgColor: palette.yellow))
+            symbols[Self.symbolKey("camera", style)] =
+                Self.symbol("camera.fill", pointSize: 22, color: UIColor(cgColor: palette.label))
+            symbols[Self.symbolKey("camera.over", style)] =
+                Self.symbol("camera.fill", pointSize: 22, color: UIColor(cgColor: palette.red))
             symbols[Self.symbolKey("alert.critical", style)] =
                 Self.symbol("exclamationmark.triangle.fill", pointSize: 24, color: UIColor(cgColor: palette.red))
         }
@@ -231,8 +235,14 @@ final class DashRenderer {
         let left = rect.minX + Layout.cardPadding
         drawText(timeFormatter.string(from: scene.date), font: clockFont, color: colors.label,
                  at: CGPoint(x: left, y: rect.minY + 140), context: context)
-        // A warning takes the date's place: it matters more.
-        if let alert = scene.alert {
+        // A camera ahead or a warning takes the date's place: they matter more.
+        if let camera = scene.camera {
+            let over = isOver(camera, scene)
+            drawSymbol(over ? "camera.over" : "camera", at: CGPoint(x: left, y: rect.minY + 175), context: context)
+            drawText(cameraText(camera), font: bodyStrongFont, color: over ? colors.red : colors.label,
+                     at: CGPoint(x: left + 38, y: rect.minY + 196),
+                     maxWidth: rect.width - Layout.cardPadding * 2 - 38, context: context)
+        } else if let alert = scene.alert {
             drawSymbol(alert.critical ? "alert.critical" : "alert.warning", at: CGPoint(x: left, y: rect.minY + 173),
                        context: context)
             drawText(alert.text, font: bodyStrongFont, color: colors.label, at: CGPoint(x: left + 38, y: rect.minY + 196),
@@ -330,6 +340,7 @@ final class DashRenderer {
         drawThenPill(navigation, context: context)
         drawArrivalCard(navigation, context: context)
         drawTimePill(scene, context: context)
+        drawCameraPill(scene, context: context)
         drawAlertPill(scene, context: context)
         drawSpeedPill(scene, context: context)
     }
@@ -507,12 +518,38 @@ final class DashRenderer {
               let icon = symbols[Self.symbolKey(alert.critical ? "alert.critical" : "alert.warning", style)] else { return }
         let iconSize = CGSize(width: icon.width, height: icon.height)
         let width = 20 + iconSize.width + 10 + textWidth(alert.text, font: headingFont) + 22
-        let rect = side(CGRect(x: size.width - Layout.margin - width, y: Layout.margin + 58 + 10, width: width, height: 50))
+        let top = Layout.margin + 58 + 10 + (scene.camera != nil ? 60 : 0)
+        let rect = side(CGRect(x: size.width - Layout.margin - width, y: top, width: width, height: 50))
         drawCard(rect, color: colors.cardOverMap, radius: 25, context: context)
         drawImage(icon, in: CGRect(x: rect.minX + 20, y: rect.midY - iconSize.height / 2,
                                    width: iconSize.width, height: iconSize.height), context: context)
         drawText(alert.text, font: headingFont, color: colors.label,
                  at: CGPoint(x: rect.minX + 30 + iconSize.width, y: rect.midY + 8), context: context)
+    }
+
+    /// The speed camera ahead, under the time: red while we are over its limit.
+    private func drawCameraPill(_ scene: DashScene, context: CGContext) {
+        guard let camera = scene.camera else { return }
+        let over = isOver(camera, scene)
+        guard let icon = symbols[Self.symbolKey(over ? "camera.over" : "camera", style)] else { return }
+        let text = cameraText(camera)
+        let iconSize = CGSize(width: icon.width, height: icon.height)
+        let width = 20 + iconSize.width + 10 + textWidth(text, font: headingFont) + 22
+        let rect = side(CGRect(x: size.width - Layout.margin - width, y: Layout.margin + 58 + 10, width: width, height: 50))
+        drawCard(rect, color: colors.cardOverMap, radius: 25, context: context)
+        drawImage(icon, in: CGRect(x: rect.minX + 20, y: rect.midY - iconSize.height / 2,
+                                   width: iconSize.width, height: iconSize.height), context: context)
+        drawText(text, font: headingFont, color: over ? colors.red : colors.label,
+                 at: CGPoint(x: rect.minX + 30 + iconSize.width, y: rect.midY + 8), context: context)
+    }
+
+    private func cameraText(_ camera: DashScene.CameraAhead) -> String {
+        "กล้อง \(DashFormat.distance(camera.distance))" + (camera.limit.map { " · \(Int($0))" } ?? "")
+    }
+
+    private func isOver(_ camera: DashScene.CameraAhead, _ scene: DashScene) -> Bool {
+        guard let limit = camera.limit, let location = scene.location, location.speed >= 0 else { return false }
+        return location.speed * 3.6 > limit
     }
 
     private func textWidth(_ text: String, font: CTFont) -> CGFloat {

@@ -22,6 +22,13 @@ struct DashScene {
         var rearTireKPa: Int?
     }
 
+    /// The next speed camera ahead (SpeedCameraWatch).
+    struct CameraAhead: Equatable {
+        let distance: Double
+        /// km/h, when mapped.
+        let limit: Double?
+    }
+
     /// One warning at a time, shown on the dash and said once (RideAlerts).
     struct Alert: Equatable {
         let text: String
@@ -65,6 +72,7 @@ struct DashScene {
     /// Layout mirrored left to right.
     var mapOnRight = false
     var alert: Alert?
+    var camera: CameraAhead?
 }
 
 /// One compass reading: degrees clockwise from north, and when.
@@ -105,6 +113,7 @@ final class DashSceneStore {
     private var threeD = true
     private var mapOnRight = false
     private var alert: DashScene.Alert?
+    private var camera: DashScene.CameraAhead?
 
     func set(location: CLLocation) {
         lock.lock(); self.location = location; lock.unlock()
@@ -130,6 +139,10 @@ final class DashSceneStore {
         lock.lock(); self.zoom = zoom; lock.unlock()
     }
 
+    func set(camera: DashScene.CameraAhead?) {
+        lock.lock(); self.camera = camera; lock.unlock()
+    }
+
     func set(alert: DashScene.Alert?) {
         lock.lock(); self.alert = alert; lock.unlock()
     }
@@ -150,7 +163,7 @@ final class DashSceneStore {
         lock.lock(); defer { lock.unlock() }
         return DashScene(date: Date(), location: location, map: map, vehicle: vehicle, navigation: navigation,
                          style: style, guidanceMetersPerPixel: 1.25 * zoom, compass: compass, threeD: threeD,
-                         mapOnRight: mapOnRight, alert: alert)
+                         mapOnRight: mapOnRight, alert: alert, camera: camera)
     }
 }
 
