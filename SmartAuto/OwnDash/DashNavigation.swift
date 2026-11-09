@@ -96,11 +96,13 @@ struct DashRoute {
     }
 
     /// Legs joined end to end. Each leg after the first starts with an empty "start" step at the
-    /// stop; that is folded into the step before, so the stop is one manoeuvre, not two.
-    init(legs: [MKRoute]) {
+    /// stop; that is folded into the step before, so the stop is one manoeuvre, not two. `lead` is
+    /// where we are when the route was asked for from a point ahead of us: the stretch to it comes first.
+    init(legs: [MKRoute], lead: CLLocationCoordinate2D? = nil) {
         var coordinates: [CLLocationCoordinate2D] = []
         var steps: [(instruction: String, distance: Double)] = []
         var ends: [Int] = []
+        if let lead { coordinates.append(lead) }
         for (legIndex, leg) in legs.enumerated() {
             let count = leg.polyline.pointCount
             var points = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: count)
@@ -116,6 +118,9 @@ struct DashRoute {
                 }
             }
         }
+        if lead != nil, coordinates.count > 1, !steps.isEmpty {
+            steps[0].distance += DashRoute.meters(coordinates[0], coordinates[1])
+        }
         self.init(coordinates: coordinates, steps: steps,
                   expectedTravelTime: legs.reduce(0) { $0 + $1.expectedTravelTime })
         let cumulative = self.cumulative
@@ -123,17 +128,26 @@ struct DashRoute {
     }
 
     /// Where we are along the route. `hint` is the segment found last time, which keeps the search
-    /// local on long routes and stops it jumping to a parallel stretch of the same road.
-    func progress(at coordinate: CLLocationCoordinate2D, hint: Int?) -> DashRouteProgress {
+    /// local on long routes and stops it jumping to a parallel stretch of the same road. `course`
+    /// (when moving) prefers stretches that go our way, where the route comes back along a road.
+    func progress(at coordinate: CLLocationCoordinate2D, hint: Int?, course: Double? = nil) -> DashRouteProgress {
         guard coordinates.count >= 2 else {
             return DashRouteProgress(segment: 0, distanceAlong: 0, offRoute: 0, nextStep: nil,
                                      distanceToNextStep: 0, remainingDistance: 0, remainingTime: 0)
         }
         func nearest(in range: Range<Int>) -> (segment: Int, along: Double, off: Double) {
             var best = (segment: range.lowerBound, along: 0.0, off: Double.greatestFiniteMagnitude)
+            var bestScore = Double.greatestFiniteMagnitude
             for segment in range {
                 let (fraction, off) = Self.project(coordinate, onto: coordinates[segment], coordinates[segment + 1])
-                if off < best.off {
+                guard off < bestScore else { continue }
+                var score = off
+                if let course, cumulative[segment + 1] - cumulative[segment] > 1,
+                   Self.angle(course, Self.bearing(coordinates[segment], coordinates[segment + 1])) > 100 {
+                    score += 80
+                }
+                if score < bestScore {
+                    bestScore = score
                     let along = cumulative[segment] + fraction * (cumulative[segment + 1] - cumulative[segment])
                     best = (segment, along, off)
                 }
@@ -174,7 +188,44 @@ struct DashRoute {
         Self.coordinate(at: along, coordinates: coordinates, cumulative: cumulative)
     }
 
+    /// Direction of segment `segment`, degrees clockwise from north.
+    func bearing(atSegment segment: Int) -> Double {
+        guard coordinates.count >= 2 else { return 0 }
+        let index = max(0, min(segment, coordinates.count - 2))
+        return Self.bearing(coordinates[index], coordinates[index + 1])
+    }
+
+    /// Whether `other` keeps to this route for its first `length` metres (nine in ten points every
+    /// 250 m within 40 m of it): the same road, perhaps with a new time.
+    func sharesRoad(with other: DashRoute, over length: Double) -> Bool {
+        var along = 0.0, total = 0, on = 0
+        while along <= min(length, other.distance) {
+            total += 1
+            if progress(at: other.coordinate(at: along), hint: nil).offRoute < 40 { on += 1 }
+            along += 250
+        }
+        return total > 0 && Double(on) >= Double(total) * 0.9
+    }
+
     // MARK: Geometry
+
+    /// The angle between two bearings, 0 to 180 degrees.
+    static func angle(_ a: Double, _ b: Double) -> Double {
+        let difference = abs((a - b).truncatingRemainder(dividingBy: 360))
+        return difference > 180 ? 360 - difference : difference
+    }
+
+    /// Bearing from the first point to the one `meters` along the line, or nil if it is shorter.
+    static func initialBearing(_ coordinates: [CLLocationCoordinate2D], over meters: Double) -> Double? {
+        guard let first = coordinates.first else { return nil }
+        var along = 0.0
+        for index in coordinates.indices.dropFirst() {
+            along += Self.meters(coordinates[index - 1], coordinates[index])
+            if along >= meters { return bearing(first, coordinates[index]) }
+        }
+        guard let last = coordinates.last, along > 10 else { return nil }
+        return bearing(first, last)
+    }
 
     static func meters(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
         CLLocation(latitude: a.latitude, longitude: a.longitude)
@@ -256,5 +307,13 @@ enum DashFormat {
         let minutes = max(1, Int((seconds / 60).rounded()))
         if minutes < 60 { return ("\(minutes)", "นาที") }
         return (String(format: "%d:%02d", minutes / 60, minutes % 60), "ชม.")
+    }
+}
+
+extension MKPolyline {
+    var allCoordinates: [CLLocationCoordinate2D] {
+        var coordinates = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: pointCount)
+        getCoordinates(&coordinates, range: NSRange(location: 0, length: pointCount))
+        return coordinates
     }
 }

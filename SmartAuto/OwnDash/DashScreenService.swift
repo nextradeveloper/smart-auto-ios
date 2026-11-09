@@ -72,6 +72,9 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         navigator.onRoute = { [weak self] route in
             self?.maps.prepare(along: route)
         }
+        navigator.onAnnounce = { [weak self] text in
+            self?.voice.announce(text)
+        }
     }
 
     private func log(_ text: String) {

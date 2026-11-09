@@ -95,6 +95,12 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
         return String(format: "%.1f กิโลเมตร", kilometres)
     }
 
+    /// News about the route ("พบเส้นทางที่เร็วกว่า…"), after anything being said.
+    func announce(_ text: String) {
+        guard DashSettings.voice else { return }
+        say(text, interrupt: false)
+    }
+
     /// A warning (fuel, tyres), said once every half hour at most and after anything being said.
     func alert(_ text: String) {
         guard DashSettings.voice else { return }

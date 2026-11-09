@@ -126,6 +126,40 @@ extension DashNavigationTests {
         XCTAssertEqual(heading ?? -1, 30, accuracy: 1)
     }
 
+    /// A route that goes 1 km north and comes back down the same road: riding south halfway, we are
+    /// on the way back (1.5 km along), not the way out.
+    func testProgressFollowsOurDirection() {
+        let start = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0)
+        let north = CLLocationCoordinate2D(latitude: 13.0 + 1000 / 110_540.0, longitude: 100.0)
+        let route = DashRoute(coordinates: [start, north, start], steps: [("", 1000), ("กลับรถ", 1000)],
+                              expectedTravelTime: 200)
+        let halfway = CLLocationCoordinate2D(latitude: 13.0 + 500 / 110_540.0, longitude: 100.0)
+        XCTAssertEqual(route.progress(at: halfway, hint: nil, course: 180).distanceAlong, 1500, accuracy: 10)
+        XCTAssertEqual(route.progress(at: halfway, hint: nil, course: 0).distanceAlong, 500, accuracy: 10)
+    }
+
+    /// A new route that starts by heading back, or with a U-turn, is turning back.
+    func testTurningBackIsRecognised() {
+        let here = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0)
+        let northward = [here, CLLocationCoordinate2D(latitude: 13.0 + 200 / 110_540.0, longitude: 100.0)]
+        let southward = [here, CLLocationCoordinate2D(latitude: 13.0 - 200 / 110_540.0, longitude: 100.0)]
+        XCTAssertFalse(DashNavigator.startsByTurningBack(northward, instructions: [("", 0), ("เลี้ยวซ้าย", 200)], course: 0))
+        XCTAssertTrue(DashNavigator.startsByTurningBack(southward, instructions: [("", 0)], course: 0))
+        XCTAssertTrue(DashNavigator.startsByTurningBack(northward, instructions: [("", 0), ("กลับรถ", 50)], course: 0))
+    }
+
+    /// Same road with a new time, or a different road.
+    func testSharesRoad() {
+        let start = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0)
+        let north = CLLocationCoordinate2D(latitude: 13.0 + 3000 / 110_540.0, longitude: 100.0)
+        let east = CLLocationCoordinate2D(latitude: 13.0, longitude: 100.0 + 3000 / 108_000.0)
+        let main = DashRoute(coordinates: [start, north], steps: [("", 3000)], expectedTravelTime: 300)
+        let same = DashRoute(coordinates: [start, north], steps: [("", 3000)], expectedTravelTime: 200)
+        let other = DashRoute(coordinates: [start, east], steps: [("", 3000)], expectedTravelTime: 200)
+        XCTAssertTrue(main.sharesRoad(with: same, over: 5000))
+        XCTAssertFalse(main.sharesRoad(with: other, over: 5000))
+    }
+
     /// Spoken distances read the way Thai voices say them.
     func testSpokenDistance() {
         XCTAssertEqual(DashVoice.spokenDistance(230), "250 เมตร")

@@ -89,6 +89,10 @@ final class DashNavigator: ObservableObject {
 
     /// A new route (first or after rerouting), so maps along it can be prepared.
     var onRoute: (@MainActor (DashRoute) -> Void)?
+    /// Something to say about the route ("พบเส้นทางที่เร็วกว่า…").
+    var onAnnounce: (@MainActor (String) -> Void)?
+    private var lastFasterCheck = Date()
+    private var checkingFaster = false
 
     private var offRouteSince: Date?
     private var lastReroute = Date.distantPast
@@ -139,8 +143,12 @@ final class DashNavigator: ObservableObject {
     /// One route per leg: `origin` to the first place, then on to each next one. Apple routes one
     /// leg at a time, so stops are routed leg by leg, as Apple Maps does.
     static func legs(through places: [DashDestination], from origin: CLLocation?) async throws -> [MKRoute] {
+        try await legs(through: places, start: Self.origin(origin))
+    }
+
+    private static func legs(through places: [DashDestination], start: MKMapItem) async throws -> [MKRoute] {
         var legs: [MKRoute] = []
-        var from = Self.origin(origin)
+        var from = start
         for place in places {
             let response = try await MKDirections(request: Self.request(from: from, to: place.mapItem)).calculate()
             guard let leg = response.routes.first else { throw ZontesError.message("ไม่พบเส้นทางไป \(place.name)") }
@@ -148,6 +156,65 @@ final class DashNavigator: ObservableObject {
             from = place.mapItem
         }
         return legs
+    }
+
+    /// Where we will be `meters` on along `course`.
+    nonisolated static func ahead(of coordinate: CLLocationCoordinate2D, course: Double, meters: Double) -> CLLocationCoordinate2D {
+        let radians = course * .pi / 180
+        return CLLocationCoordinate2D(
+            latitude: coordinate.latitude + meters * cos(radians) / 111_320,
+            longitude: coordinate.longitude + meters * sin(radians) / (111_320 * cos(coordinate.latitude * .pi / 180)))
+    }
+
+    /// Whether a route starts by turning back against `course`: its first 80 m head the other way,
+    /// or one of its first steps, within 300 m, is a U-turn.
+    nonisolated static func startsByTurningBack(_ coordinates: [CLLocationCoordinate2D], instructions: [(text: String, distance: Double)],
+                                    course: Double) -> Bool {
+        if let bearing = DashRoute.initialBearing(coordinates, over: 80), DashRoute.angle(bearing, course) > 100 {
+            return true
+        }
+        var along = 0.0
+        for step in instructions.prefix(3) where along < 300 {
+            let text = step.text.lowercased()
+            if text.contains("กลับรถ") || text.contains("u-turn") || text.contains("make a u") { return true }
+            along += step.distance
+        }
+        return false
+    }
+
+    private static func alternates(from origin: MKMapItem, to place: DashDestination) async -> [MKRoute] {
+        let request = Self.request(from: origin, to: place.mapItem)
+        request.requestsAlternateRoutes = true
+        return (try? await MKDirections(request: request).calculate().routes) ?? []
+    }
+
+    /// Routes on from where we are, the way we are going. Apple's directions take no heading, so
+    /// asked from a point they often begin with "กลับรถ" back to the old road: riders found it kept
+    /// forcing them back. So we also ask from a point ahead on our road, and take the quickest route
+    /// that does not start by turning back (turning back costs it 5 minutes).
+    static func legsAhead(through places: [DashDestination], from location: CLLocation?) async throws
+        -> (legs: [MKRoute], lead: CLLocationCoordinate2D?) {
+        guard let location, let first = places.first, location.course >= 0, location.speed >= 2 else {
+            return (try await legs(through: places, from: location), nil)
+        }
+        let course = location.course, speed = location.speed
+        let leadMeters = min(250, max(80, speed * 8))
+        let aheadPoint = ahead(of: location.coordinate, course: course, meters: leadMeters)
+        async let fromHere = alternates(from: Self.origin(location), to: first)
+        async let fromAhead = alternates(from: MKMapItem(placemark: MKPlacemark(coordinate: aheadPoint)), to: first)
+        let candidates = await fromHere.map { ($0, false) } + fromAhead.map { ($0, true) }
+        var best: (route: MKRoute, ahead: Bool, cost: TimeInterval)?
+        for (route, isAhead) in candidates {
+            var cost = route.expectedTravelTime + (isAhead ? leadMeters / max(speed, 5) : 0)
+            if startsByTurningBack(route.polyline.allCoordinates,
+                                   instructions: route.steps.map { ($0.instructions, $0.distance) }, course: course) {
+                cost += 300
+            }
+            if cost < (best?.cost ?? .greatestFiniteMagnitude) { best = (route, isAhead, cost) }
+        }
+        guard let best else { return (try await legs(through: places, from: location), nil) }
+        let rest = try await legs(through: Array(places.dropFirst()), start: first.mapItem)
+        return ([best.route] + rest, best.ahead ? location.coordinate : nil)
     }
 
     func start(_ destination: DashDestination, stops: [DashDestination], legs: [MKRoute]) {
@@ -159,6 +226,7 @@ final class DashNavigator: ObservableObject {
         progress = nil
         offRouteSince = nil
         arrivedAt = nil
+        lastFasterCheck = Date()
         status = .guiding
         RecentDestinations.add(destination)
         recents = RecentDestinations.load()
@@ -196,7 +264,8 @@ final class DashNavigator: ObservableObject {
     func update(with location: CLLocation) {
         lastLocation = location
         guard let route, let destination, status != .idle else { return }
-        let progress = route.progress(at: location.coordinate, hint: self.progress?.segment)
+        let course = location.course >= 0 && location.speed >= 4 ? location.course : nil
+        let progress = route.progress(at: location.coordinate, hint: self.progress?.segment, course: course)
         self.progress = progress
 
         if status == .arrived {
@@ -219,16 +288,72 @@ final class DashNavigator: ObservableObject {
             return
         }
 
-        // Off the route by more than 50 m for 5 s, with a usable fix: ask for a new one.
-        if progress.offRoute > 50, location.horizontalAccuracy < 40 {
+        // Left the route: far from it, or near it but going another way (a frontage road, a turn
+        // the route did not take, or turned round on the route itself). How long it must last
+        // depends on how sure that is.
+        let wrongWay = course.map { DashRoute.angle($0, route.bearing(atSegment: progress.segment)) > 90 } ?? false
+        let usable = location.horizontalAccuracy < 40
+        let needed: TimeInterval?
+        if usable, progress.offRoute > 50 {
+            needed = 4
+        } else if usable, wrongWay, progress.offRoute > 25 {
+            needed = 3
+        } else if wrongWay {
+            needed = 8
+        } else if progress.offRoute > 30, location.horizontalAccuracy <= 10 {
+            needed = 8
+        } else {
+            needed = nil
+        }
+        if let needed {
             if offRouteSince == nil { offRouteSince = Date() }
-            if let since = offRouteSince, Date().timeIntervalSince(since) >= 5, status != .rerouting,
-               Date().timeIntervalSince(lastReroute) > 10 {
-                reroute("off the route by \(Int(progress.offRoute)) m")
+            if let since = offRouteSince, Date().timeIntervalSince(since) >= needed, status != .rerouting,
+               Date().timeIntervalSince(lastReroute) > 8 {
+                reroute(wrongWay ? "going another way, \(Int(progress.offRoute)) m off" : "off the route by \(Int(progress.offRoute)) m")
             }
         } else {
             offRouteSince = nil
         }
+
+        // On the route: every 5 minutes, whether there is now a quicker way.
+        if status == .guiding, needed == nil, !checkingFaster, location.speed >= 3,
+           Date().timeIntervalSince(lastFasterCheck) > 300, Date().timeIntervalSince(lastReroute) > 120 {
+            checkForFaster(from: location)
+        }
+    }
+
+    /// Switches to a route found while riding: quicker by 3 minutes and a tenth at least, and not
+    /// the same road with a new time. Said aloud, as the rider cannot tap anything.
+    private func checkForFaster(from location: CLLocation) {
+        guard let destination, let progress else { return }
+        checkingFaster = true
+        lastFasterCheck = Date()
+        let places = stops + [destination]
+        let remaining = progress.remainingTime
+        Task {
+            defer { self.checkingFaster = false }
+            guard let found = try? await Self.legsAhead(through: places, from: location),
+                  self.status == .guiding, self.destination == destination, self.stops + [destination] == places,
+                  let current = self.route else { return }
+            let saving = remaining - found.legs.reduce(0) { $0 + $1.expectedTravelTime }
+            guard saving >= max(180, remaining * 0.1) else { return }
+            let candidate = DashRoute(legs: found.legs, lead: found.lead)
+            if current.sharesRoad(with: candidate, over: 5000) {
+                self.log("Quicker estimate on the same road (\(Int(saving / 60)) min); route kept.")
+                return
+            }
+            let minutes = Int((saving / 60).rounded())
+            self.use(candidate)
+            self.log("Faster route: \(minutes) min sooner, \(Int(candidate.distance)) m.")
+            self.onAnnounce?("พบเส้นทางที่เร็วกว่า ประหยัด \(minutes) นาที")
+        }
+    }
+
+    private func use(_ built: DashRoute) {
+        route = built
+        progress = nil
+        offRouteSince = nil
+        onRoute?(built)
     }
 
     /// A new route from here through the stops still ahead.
@@ -241,15 +366,13 @@ final class DashNavigator: ObservableObject {
         let location = lastLocation
         Task {
             do {
-                let legs = try await Self.legs(through: places, from: location)
+                let found = try await Self.legsAhead(through: places, from: location)
                 guard self.destination == destination, self.status != .idle else { return }
-                let built = DashRoute(legs: legs)
-                self.route = built
-                self.progress = nil
-                self.offRouteSince = nil
+                let built = DashRoute(legs: found.legs, lead: found.lead)
                 self.status = .guiding
-                self.log("New route: \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min.")
-                self.onRoute?(built)
+                self.use(built)
+                self.log("New route: \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min" +
+                         (found.lead != nil ? ", from the road ahead." : "."))
             } catch {
                 self.log("Rerouting failed: \(error.localizedDescription)")
                 if self.status == .rerouting { self.status = .guiding }
