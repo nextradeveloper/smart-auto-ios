@@ -81,9 +81,12 @@ struct FindVehicleView: View {
     @State private var hasCentered = false
     @State private var vibrates = true
     @State private var isSignalling = false
+    @State private var isRelocking = false
+    @State private var confirmsSignal = false
     @State private var signalError: String?
 
     private var level: ProximityLevel? { bluetooth.signalStrength.map { ProximityLevel(rssi: $0) } }
+    private var needsLockRecovery: Bool { bluetooth.requiresRelock || bluetooth.isLocked == false }
 
     var body: some View {
         NavigationStack {
@@ -97,6 +100,9 @@ struct FindVehicleView: View {
                 .padding(16)
             }
             .background(Color.black)
+            .safeAreaInset(edge: .bottom) {
+                if needsLockRecovery && !bluetooth.signalInProgress { lockRecovery }
+            }
             .navigationTitle("ค้นหารถ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -106,6 +112,14 @@ struct FindVehicleView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .confirmationDialog("ให้รถส่งเสียงและกระพริบไฟ?", isPresented: $confirmsSignal, titleVisibility: .visible) {
+            Button("ส่งเสียงและไฟ") { signal() }
+            Button("ยกเลิก", role: .cancel) {}
+        } message: {
+            Text(bluetooth.isLocked == false
+                 ? "รถจะล็อกเพื่อส่งเสียงและไฟ ตรวจสอบว่าพร้อมล็อกรถก่อนดำเนินการ"
+                 : "แอปจะปลดล็อกแล้วล็อกกลับเพื่อส่งเสียงและไฟ อยู่ใกล้รถจนยืนยันการล็อกกลับได้")
+        }
         .onAppear { start() }
         .onDisappear { stop() }
         .onChange(of: scenePhase) { phase in
@@ -157,7 +171,7 @@ struct FindVehicleView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Text("ยังไม่มีจุดจอด แอปจะจำให้เองเมื่อคุณกด Lock หรือเดินออกห่างจากรถจนสัญญาณ Bluetooth หลุด")
+                Text("ยังไม่มีจุดจอด แอปจะจำให้เมื่อล็อกรถหรือเดินออกห่างจน Bluetooth หลุด")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -222,11 +236,17 @@ struct FindVehicleView: View {
                     .padding(.leading, 12)
                 }
             } else {
-                Text(bluetooth.status.isPositive
-                     ? "กำลังวัดสัญญาณ…"
-                     : "อยู่นอกระยะ Bluetooth ของรถ เดินไปตามแผนที่ สัญญาณจะขึ้นเองเมื่อเข้าใกล้ประมาณ 30–50 ม.")
+                Text(bluetoothHelp)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            switch bluetooth.status {
+            case .unauthorized, .poweredOff:
+                Button("เปิดตั้งค่าแอป") { openSettings() }
+            case .ready:
+                Button("ค้นหา Bluetooth อีกครั้ง") { bluetooth.refresh() }
+            default:
+                EmptyView()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -239,10 +259,10 @@ struct FindVehicleView: View {
             actionButton(
                 title: "ให้รถส่งเสียงและกระพริบไฟ",
                 systemImage: "speaker.wave.2.fill",
-                isWorking: isSignalling,
+                isWorking: isSignalling || bluetooth.signalInProgress,
                 isProminent: true
-            ) { signal() }
-            .disabled(!bluetooth.status.isPositive || isSignalling || bluetooth.commandInProgress != nil)
+            ) { confirmsSignal = true }
+            .disabled(!bluetooth.status.isPositive || isSignalling || bluetooth.signalInProgress || isRelocking || bluetooth.requiresRelock || bluetooth.commandInProgress != nil)
 
             Text(signalError ?? "ใช้ได้เมื่ออยู่ในระยะ Bluetooth · รถจะปลดล็อกแล้วล็อกกลับทันทีเพื่อส่งเสียงและไฟ")
                 .font(.caption)
@@ -256,7 +276,70 @@ struct FindVehicleView: View {
             actionButton(title: "บันทึกตำแหน่งนี้เป็นจุดจอด", systemImage: "mappin.and.ellipse") {
                 parking.saveCurrentLocation()
             }
+            .disabled(parking.manualSaveState == .saving)
+            manualSaveFeedback
         }
+    }
+
+    private var bluetoothHelp: String {
+        switch bluetooth.status {
+        case .poweredOff: return "Bluetooth ปิดอยู่ เปิด Bluetooth ในตั้งค่า iOS ก่อนค้นหารถ"
+        case .unauthorized: return "ยังไม่ได้รับสิทธิ์ Bluetooth อนุญาตในตั้งค่าแอปก่อนค้นหารถ"
+        case .unavailable: return "Bluetooth ยังไม่พร้อมใช้งาน ลองตรวจ Bluetooth ในตั้งค่า iOS"
+        case .scanning: return "กำลังค้นหารถผ่าน Bluetooth อยู่ใกล้รถเพื่อเชื่อมต่อ"
+        case .connecting: return "พบรถแล้ว กำลังเชื่อมต่อ Bluetooth"
+        case .ready: return "ยังไม่พบรถ อยู่ใกล้รถแล้วค้นหาอีกครั้ง"
+        case .connected: return "กำลังวัดสัญญาณ…"
+        }
+    }
+
+    private var lockRecovery: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(bluetooth.requiresRelock ? "ยังยืนยันการล็อกกลับไม่ได้" : "รถยังปลดล็อกอยู่", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            if let signalError {
+                Text(signalError).font(.footnote).fixedSize(horizontal: false, vertical: true)
+            }
+            if !bluetooth.status.isPositive {
+                Text("อยู่ใกล้รถและเชื่อมต่อ Bluetooth เพื่อล็อกอีกครั้ง")
+                    .font(.footnote)
+            }
+            actionButton(title: "ล็อกรถอีกครั้ง", systemImage: "lock.fill", isWorking: isRelocking, isProminent: true) {
+                relock()
+            }
+            .disabled(!bluetooth.status.isPositive || isRelocking || bluetooth.signalInProgress || bluetooth.commandInProgress != nil)
+        }
+        .padding(16)
+        .background(.regularMaterial)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var manualSaveFeedback: some View {
+        switch parking.manualSaveState {
+        case .idle: EmptyView()
+        case .saving:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("กำลังหาตำแหน่งจอด…")
+            }
+            .font(.footnote)
+        case .saved:
+            Label("บันทึกจุดจอดแล้ว", systemImage: "checkmark.circle.fill")
+                .font(.footnote)
+                .foregroundStyle(.green)
+        case let .failed(message):
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func actionButton(
@@ -312,13 +395,22 @@ struct FindVehicleView: View {
         isSignalling = true
         signalError = nil
         Task {
+            defer { isSignalling = false }
             do {
                 try await bluetooth.signal()
             } catch {
                 signalError = error.localizedDescription
             }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            isSignalling = false
+        }
+    }
+
+    private func relock() {
+        isRelocking = true
+        signalError = nil
+        Task {
+            defer { isRelocking = false }
+            do { try await bluetooth.send(.lock) }
+            catch { signalError = error.localizedDescription }
         }
     }
 

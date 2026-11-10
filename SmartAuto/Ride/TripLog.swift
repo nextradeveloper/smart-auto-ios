@@ -228,6 +228,10 @@ enum TripStore {
         read([TripPoint].self, from: pointsFile(id)) ?? []
     }
 
+    static func pointsForExport(_ id: UUID) throws -> [TripPoint] {
+        try JSONDecoder().decode([TripPoint].self, from: Data(contentsOf: pointsFile(id)))
+    }
+
     static func save(_ summary: TripSummary, points: [TripPoint]) {
         write(points, to: pointsFile(summary.id))
         update(summary)
@@ -245,6 +249,10 @@ enum TripStore {
         try? FileManager.default.removeItem(at: roadsFile(id))
     }
 
+    static func deleteAll() throws {
+        try AppDataFiles.removeIfPresent(folder)
+    }
+
     /// The roads near the trip from OpenStreetMap, fetched once and kept with it.
     private static func roadsFile(_ id: UUID) -> URL { folder.appendingPathComponent("\(id.uuidString)-roads.json") }
 
@@ -253,6 +261,7 @@ enum TripStore {
     }
 
     static func saveRoads(_ roads: [MappedRoad], for id: UUID) {
+        guard summaries().contains(where: { $0.id == id }) else { return }
         write(roads, to: roadsFile(id))
     }
 
@@ -303,6 +312,16 @@ enum TripStore {
 /// Records rides while the dash screen is on (that is when location runs behind the lock screen).
 /// A trip ends after 15 minutes without moving, or when the dash screen is turned off; a stop for
 /// fuel or a coffee stays in the same trip.
+enum TripRecordingGate {
+    enum Action: Equatable { case unchanged, start, stop }
+
+    static func action(isRecording: Bool, dashRunning: Bool, enabled: Bool) -> Action {
+        let shouldRecord = dashRunning && enabled
+        if shouldRecord == isRecording { return .unchanged }
+        return shouldRecord ? .start : .stop
+    }
+}
+
 @MainActor
 final class TripRecorder: ObservableObject {
     /// The trip being recorded.
@@ -313,15 +332,28 @@ final class TripRecorder: ObservableObject {
     private var builder = TripBuilder()
     private let lean = LeanMeter()
     private var active = false
+    private var dashRunning = false
+    private let defaults: UserDefaults
+    private var preferenceObserver: NSObjectProtocol?
     private var lastCheckpoint = Date.distantPast
     private static let idleLimit: TimeInterval = 15 * 60
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let unfinished = TripStore.takeUnfinished(), unfinished.summary.distance >= TripBuilder.minimumDistance {
             TripStore.save(unfinished.summary, points: unfinished.points)
             name(unfinished.summary, points: unfinished.points)
         }
         trips = TripStore.summaries()
+        preferenceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.synchronizeRecordingPreference() }
+        }
+    }
+
+    deinit {
+        if let preferenceObserver { NotificationCenter.default.removeObserver(preferenceObserver) }
     }
 
     private func log(_ text: String) {
@@ -329,19 +361,33 @@ final class TripRecorder: ObservableObject {
     }
 
     func begin() {
-        guard !active, DashSettings.recordTrips else { return }
-        active = true
-        lean.start()
+        dashRunning = true
+        synchronizeRecordingPreference()
     }
 
     func end() {
-        guard active else { return }
-        finish()
-        lean.stop()
-        active = false
+        dashRunning = false
+        synchronizeRecordingPreference()
+    }
+
+    private func synchronizeRecordingPreference() {
+        let enabled = defaults.object(forKey: DashSettings.recordTripsKey) as? Bool ?? true
+        switch TripRecordingGate.action(isRecording: active, dashRunning: dashRunning, enabled: enabled) {
+        case .unchanged: break
+        case .start:
+            active = true
+            lastCheckpoint = .distantPast
+            lean.start()
+        case .stop:
+            finish()
+            lean.stop()
+            active = false
+        }
     }
 
     func add(_ fix: CLLocation) {
+        // Enforce the saved choice even before its notification reaches the main actor.
+        synchronizeRecordingPreference()
         guard active else { return }
         lean.set(speed: fix.speed)
         let wasRecording = builder.summary != nil
@@ -363,6 +409,14 @@ final class TripRecorder: ObservableObject {
         trips = TripStore.summaries()
     }
 
+    func deleteAll() throws {
+        guard !active else { throw ZontesError.message("ปิดจอรถและหยุดบันทึกทริปก่อนลบประวัติ") }
+        try TripStore.deleteAll()
+        builder = TripBuilder()
+        trips = []
+        current = nil
+    }
+
     private func finish() {
         let finished = builder.finish()
         TripStore.clearUnfinished()
@@ -382,8 +436,10 @@ final class TripRecorder: ObservableObject {
             var named = summary
             named.startName = await Self.placeName(first)
             named.endName = await Self.placeName(last)
+            guard TripStore.summaries().contains(where: { $0.id == summary.id }) else { return }
             // The roads too, while there is signal, so the review opens at once.
             if let roads = try? await TripRoads.fetch(points) { TripStore.saveRoads(roads, for: summary.id) }
+            guard TripStore.summaries().contains(where: { $0.id == summary.id }) else { return }
             guard named.startName != nil || named.endName != nil else { return }
             TripStore.update(named)
             self.trips = TripStore.summaries()

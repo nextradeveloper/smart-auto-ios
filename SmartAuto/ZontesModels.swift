@@ -88,10 +88,11 @@ enum VehicleCommand: String, Identifiable, CaseIterable {
     private static let seatSymbol = UIImage(systemName: "carseat.right.fill") != nil ? "carseat.right.fill" : "chair.fill"
 }
 
-enum ZontesError: LocalizedError {
+enum ZontesError: LocalizedError, Equatable {
     case invalidResponse
     case message(String)
     case missingVehicle
+    case authenticationRequired
     case invalidVehicleKey
     case commandTimedOut
     case commandRejected
@@ -105,6 +106,8 @@ enum ZontesError: LocalizedError {
             return message
         case .missingVehicle:
             return "บัญชีนี้ยังไม่มีรถที่พร้อมใช้งาน"
+        case .authenticationRequired:
+            return "เซสชันใช้ไม่ได้ กรุณาเข้าสู่ระบบอีกครั้ง"
         case .invalidVehicleKey:
             return "ข้อมูลยืนยันตัวรถไม่ครบ จึงยังส่งคำสั่งไม่ได้"
         case .commandTimedOut:

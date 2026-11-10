@@ -31,135 +31,18 @@ struct ContentView: View {
     }
 }
 
-private struct LoginView: View {
-    @EnvironmentObject private var model: ZontesAppModel
-    @State private var account = ""
-    @State private var password = ""
-    @State private var acceptsTerms = false
-
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.black, Color(red: 0.06, green: 0.07, blue: 0.08)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            ScrollView {
-                VStack(spacing: 28) {
-                    Spacer(minLength: 54)
-                    VStack(spacing: 8) {
-                        Text("ZONTES")
-                            .font(.system(size: 38, weight: .black, design: .rounded))
-                            .tracking(7)
-                        Text("SMART AUTO")
-                            .font(.caption.weight(.semibold))
-                            .tracking(4)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("เชื่อมต่อรถของคุณ")
-                            .font(.title2.bold())
-                        Text("ใช้บัญชีอีเมลและรหัสผ่านเดียวกับ ZONTES Smart")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        DarkField(title: "อีเมล", systemImage: "envelope.fill") {
-                            TextField("name@example.com", text: $account)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.emailAddress)
-                                .autocorrectionDisabled()
-                        }
-                        DarkField(title: "รหัสผ่าน", systemImage: "lock.fill") {
-                            SecureField("รหัสผ่าน ZONTES Smart", text: $password)
-                                .textContentType(.password)
-                        }
-
-                        Button {
-                            acceptsTerms.toggle()
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: acceptsTerms ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(acceptsTerms ? Color.cyan : .secondary)
-                                Text("ฉันยอมรับนโยบายความเป็นส่วนตัวของ ZONTES และอนุญาตให้แอปดึงข้อมูลรถของบัญชีนี้")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.leading)
-                            }
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            Task { await model.login(account: account, password: password) }
-                        } label: {
-                            HStack {
-                                if model.isBusy { ProgressView().tint(.black) }
-                                Text(model.isBusy ? (model.busyText.isEmpty ? "กำลังเชื่อมต่อ…" : model.busyText) : "เข้าสู่ระบบ")
-                                    .font(.headline)
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 52)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.white)
-                        .foregroundStyle(.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .disabled(!acceptsTerms || account.isEmpty || password.isEmpty || model.isBusy)
-                    }
-                    .padding(22)
-                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 26, style: .continuous)
-                            .stroke(.white.opacity(0.08))
-                    }
-                    .padding(.horizontal, 20)
-                }
-            }
-        }
-    }
-}
-
-private struct DarkField<Field: View>: View {
-    let title: String
-    let systemImage: String
-    let field: Field
-
-    init(title: String, systemImage: String, @ViewBuilder field: () -> Field) {
-        self.title = title
-        self.systemImage = systemImage
-        self.field = field()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(.cyan)
-                    .frame(width: 20)
-                field
-            }
-            .padding(.horizontal, 15)
-            .frame(minHeight: 52)
-            .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-    }
-}
-
 private struct MainShellView: View {
     @EnvironmentObject private var model: ZontesAppModel
     @State private var selection = 0
     /// Owned here so the dash screen can show the bike's battery and lock from any tab.
     @StateObject private var bluetooth = VehicleBluetoothMonitor()
     @StateObject private var dashScreen = DashScreenService()
+    @StateObject private var parking = ParkingSpotTracker()
 
     var body: some View {
         TabView(selection: $selection) {
-            VehicleDashboardView(bluetooth: bluetooth)
-                .tabItem { TabIcon.vehicle; Text("Vehicle") }
+            VehicleDashboardView(bluetooth: bluetooth, parking: parking)
+                .tabItem { TabIcon.vehicle; Text("รถ") }
                 .tag(0)
 
             DashTabView(dashScreen: dashScreen)
@@ -167,14 +50,14 @@ private struct MainShellView: View {
                 .tag(1)
 
             ServiceView(trips: dashScreen.trips)
-                .tabItem { TabIcon.service; Text("Service") }
+                .tabItem { TabIcon.service; Text("ดูแลรถ") }
                 .tag(2)
 
-            AccountView()
-                .tabItem { TabIcon.account; Text("Account") }
+            AccountView(bluetooth: bluetooth, dashScreen: dashScreen, parking: parking)
+                .tabItem { TabIcon.account; Text("บัญชี") }
                 .tag(3)
         }
-        .tint(.cyan)
+        .tint(AppTheme.accent)
         .onAppear {
             let monitor = bluetooth
             let screen = dashScreen
@@ -232,7 +115,7 @@ private enum TabIcon {
 private struct VehicleDashboardView: View {
     @EnvironmentObject private var model: ZontesAppModel
     @ObservedObject var bluetooth: VehicleBluetoothMonitor
-    @StateObject private var parking = ParkingSpotTracker()
+    @ObservedObject var parking: ParkingSpotTracker
     @State private var showsStylePicker = false
     @State private var showsFinder = false
     /// Seat or fuel lid that just opened; lit for a few seconds, as in the official app.
@@ -241,43 +124,72 @@ private struct VehicleDashboardView: View {
     @State private var fuelPromptUntil: Date?
     @State private var showsFuelEntry = false
     @State private var lastFuelPercent: Int?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    init(bluetooth: VehicleBluetoothMonitor) {
+    init(bluetooth: VehicleBluetoothMonitor, parking: ParkingSpotTracker) {
         self.bluetooth = bluetooth
+        self.parking = parking
     }
 
-    private var isLocked: Bool? { bluetooth.isLocked ?? model.vehicle?.isLocked }
+    private var isLocked: Bool? {
+        bluetooth.requiresRelock ? nil : (bluetooth.isLocked ?? model.vehicle?.isLocked)
+    }
     private var batteryVoltage: Double? { bluetooth.batteryVoltage ?? model.vehicle?.batteryVoltage }
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [.black, Color(red: 0.05, green: 0.05, blue: 0.055), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            AppTheme.background.ignoresSafeArea()
 
-            // The page fits the screen instead of scrolling; the artwork gives up space first.
-            VStack(spacing: 12) {
-                header
-                connectionStrip
-                statusBar
-                vehicleImage
-                controlWheel
-                searchButton
-                lastUpdate
+            ScrollView {
+                VStack(spacing: 16) {
+                    header
+                    if bluetooth.requiresRelock {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(bluetooth.signalInProgress ? "กำลังส่งสัญญาณและล็อกกลับ" : "ยังยืนยันการล็อกกลับไม่ได้",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.orange)
+                            if !bluetooth.signalInProgress {
+                                Button("ตรวจสอบและล็อกรถ") { showsFinder = true }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+                    }
+                    if model.vehicle == nil && model.isBusy {
+                        dashboardSkeleton
+                    } else if model.hasNoVehicle {
+                        VStack(spacing: 16) {
+                            Image(systemName: "motorcycle").font(.largeTitle).foregroundStyle(.secondary)
+                            Text("ยังไม่มีรถที่พร้อมใช้งาน").font(.headline)
+                            Text("ตรวจสอบการผูกรถใน ZONTES Smart แล้วกลับมาลองอีกครั้ง")
+                                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Button("ตรวจสอบอีกครั้ง") { Task { await model.refresh() } }
+                                .buttonStyle(.borderedProminent)
+                            Button("เปลี่ยนบัญชี") { model.logout() }
+                        }
+                        .padding(.vertical, 32)
+                    } else {
+                        connectionStrip
+                        if dynamicTypeSize.isAccessibilitySize { accessibleStatus } else { statusBar }
+                        vehicleImage
+                        if dynamicTypeSize.isAccessibilitySize { controlGrid } else { controlWheel }
+                        searchButton
+                        lastUpdate
+                        if model.vehicle == nil {
+                            Text("โหลดข้อมูลรถไม่สำเร็จ แตะรีเฟรชเพื่อลองอีกครั้ง")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 8)
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
-
-            if model.isBusy && model.vehicle == nil {
-                ProgressView(model.busyText.isEmpty ? "กำลังดึงข้อมูลรถ…" : model.busyText)
-                    .padding(18)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            }
         }
         .sheet(isPresented: $showsStylePicker) {
             VehicleStylePicker()
@@ -298,6 +210,21 @@ private struct VehicleDashboardView: View {
         .sheet(isPresented: $showsFuelEntry, onDismiss: { fuelPromptUntil = nil }) {
             FuelEntryView(fill: nil)
         }
+    }
+
+    private var dashboardSkeleton: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 8) {
+                SkeletonBlock().frame(height: 48)
+                SkeletonBlock().frame(height: 48)
+            }
+            SkeletonBlock().frame(height: 42)
+            SkeletonBlock().frame(height: 190)
+            Circle().fill(AppTheme.surface).frame(width: 252, height: 252)
+            SkeletonBlock().frame(height: 44)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("กำลังโหลดข้อมูลรถ")
     }
 
     private func configureBluetooth() {
@@ -366,12 +293,10 @@ private struct VehicleDashboardView: View {
                         .lineLimit(1)
                 }
             }
+            .redacted(reason: model.vehicle == nil && model.isBusy ? .placeholder : [])
             Spacer(minLength: 0)
             RoundIconButton(systemImage: "arrow.clockwise", label: "รีเฟรช", isWorking: model.isBusy) {
                 refreshAll()
-            }
-            RoundIconButton(systemImage: "bell", label: "การแจ้งเตือน") {
-                model.message = "ยังไม่มีการแจ้งเตือนใหม่"
             }
         }
     }
@@ -380,7 +305,7 @@ private struct VehicleDashboardView: View {
         HStack(spacing: 8) {
             ConnectionBadge(
                 title: "ระบบรถ",
-                value: model.vehicle?.isOnline == true ? "ออนไลน์" : "ออฟไลน์",
+                value: model.vehicle.map { $0.isOnline ? "ออนไลน์" : "ออฟไลน์" } ?? "—",
                 symbol: "network",
                 isPositive: model.vehicle?.isOnline == true
             )
@@ -426,8 +351,30 @@ private struct VehicleDashboardView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
-        .frame(height: 42)
+        .frame(minHeight: 42)
         .background(.white.opacity(0.06), in: Capsule())
+    }
+
+    private var accessibleStatus: some View {
+        VStack(spacing: 12) {
+            LabeledContent("น้ำมัน", value: model.vehicle?.fuelPercent.map { "\($0)%" } ?? "—")
+            LabeledContent("แบตเตอรี่", value: batteryVoltage.map { String(format: "%.1f V", $0) } ?? "—")
+            LabeledContent("ระยะทางที่เหลือ", value: model.vehicle?.rangeKilometers.map { "\($0) km" } ?? "—")
+        }
+        .padding(16)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+    }
+
+    private var controlGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            ForEach([VehicleCommand.lock, .unlock, .seat, .fuelLid]) { command in
+                WheelButton(title: command.title, systemImage: command.systemImage,
+                            isActive: (command == .lock && isLocked == true) || (command == .unlock && isLocked == false) || justOpened == command,
+                            isWorking: bluetooth.commandInProgress == command, expanded: true) { run(command) }
+                    .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+            }
+        }
+        .disabled(!bluetooth.status.isPositive || bluetooth.signalInProgress || bluetooth.commandInProgress != nil)
     }
 
     /// Rough 12 V battery charge from the resting voltage; charging reads as full.
@@ -449,37 +396,21 @@ private struct VehicleDashboardView: View {
 
     private var vehicleImage: some View {
         ZStack {
-            Ellipse()
-                .fill(.cyan.opacity(0.08))
-                .frame(width: 270, height: 54)
-                .blur(radius: 18)
-                .offset(y: 70)
-
             if let url = model.vehicleImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFit()
-                    case .failure:
-                        vehiclePlaceholder
-                    default:
-                        ProgressView().tint(.white)
-                    }
-                }
+                VehicleArtwork(url: url, maxPixelSize: 900)
             } else {
                 vehiclePlaceholder
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 110, maxHeight: 235)
-        .layoutPriority(-1)
+        .frame(height: 190)
         .contentShape(Rectangle())
         .onTapGesture { showsStylePicker = true }
         .overlay(alignment: .bottomTrailing) {
             Button { showsStylePicker = true } label: {
                 Image(systemName: "paintpalette.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
                     .background(.white.opacity(0.08), in: Circle())
             }
             .buttonStyle(.plain)
@@ -498,46 +429,38 @@ private struct VehicleDashboardView: View {
     private var controlWheel: some View {
         ZStack {
             Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.white.opacity(0.13), Color.white.opacity(0.045), .black.opacity(0.8)],
-                        center: .center,
-                        startRadius: 18,
-                        endRadius: 126
-                    )
-                )
+                .fill(AppTheme.surface)
                 .overlay { Circle().stroke(.white.opacity(0.08)) }
 
             wheelDivider.rotationEffect(.degrees(45))
             wheelDivider.rotationEffect(.degrees(-45))
 
             Group {
-                WheelButton(title: "Fuel", systemImage: "fuelpump.fill",
+                WheelButton(title: "ฝาถัง", systemImage: "fuelpump.fill",
                             isActive: justOpened == .fuelLid,
                             isWorking: bluetooth.commandInProgress == .fuelLid) { run(.fuelLid) }
                     .offset(y: -82)
 
-                WheelButton(title: "Lock", systemImage: "lock.fill",
+                WheelButton(title: "ล็อก", systemImage: "lock.fill",
                             isActive: isLocked == true,
                             isWorking: bluetooth.commandInProgress == .lock) { run(.lock) }
                     .offset(x: -82)
 
-                WheelButton(title: "Unlock", systemImage: "lock.open.fill",
+                WheelButton(title: "ปลดล็อก", systemImage: "lock.open.fill",
                             isActive: isLocked == false,
                             isWorking: bluetooth.commandInProgress == .unlock) { run(.unlock) }
                     .offset(x: 82)
 
-                WheelButton(title: "Seat", systemImage: VehicleCommand.seat.systemImage,
+                WheelButton(title: "เบาะ", systemImage: VehicleCommand.seat.systemImage,
                             isActive: justOpened == .seat,
                             isWorking: bluetooth.commandInProgress == .seat) { run(.seat) }
                     .offset(y: 82)
             }
-            .disabled(!bluetooth.status.isPositive || bluetooth.commandInProgress != nil)
+            .disabled(!bluetooth.status.isPositive || bluetooth.signalInProgress || bluetooth.commandInProgress != nil)
 
             Image(systemName: bluetooth.status.isPositive ? "bolt.fill" : "bolt.slash.fill")
                 .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(bluetooth.status.isPositive ? Color.cyan : Color.secondary)
-                .shadow(color: bluetooth.status.isPositive ? Color.cyan.opacity(0.7) : Color.clear, radius: 8)
                 .frame(width: 68, height: 68)
                 .background(.black, in: Circle())
                 .overlay {
@@ -597,7 +520,7 @@ private struct RoundIconButton: View {
                     Image(systemName: systemImage).font(.title3)
                 }
             }
-            .frame(width: 42, height: 42)
+            .frame(width: 44, height: 44)
             .background(.white.opacity(0.06), in: Circle())
         }
         .buttonStyle(.plain)
@@ -625,7 +548,14 @@ private struct VehicleStylePicker: View {
                                 .multilineTextAlignment(.center)
                             Button("ลองอีกครั้ง") { Task { await load() } }
                         } else {
-                            ProgressView("กำลังโหลดรุ่นรถ…")
+                            ForEach(0..<5) { _ in
+                                HStack(spacing: 14) {
+                                    SkeletonBlock().frame(width: 76, height: 58)
+                                    SkeletonBlock().frame(height: 18)
+                                }
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("กำลังโหลดรุ่นรถ")
                         }
                     }
                     .padding(24)
@@ -647,7 +577,7 @@ private struct VehicleStylePicker: View {
                                 }
                             }
                         } footer: {
-                            Text("เลือกรุ่นและสีให้ตรงกับที่เลือกไว้ตอนผูกรถในแอป ZONTES Smart")
+                            Text("เลือกรุ่นและสีรถของคุณ")
                         }
 
                         ForEach(orderedCategories) { category in
@@ -665,7 +595,7 @@ private struct VehicleStylePicker: View {
                     }
                 }
             }
-            .background(Color.black)
+            .background(AppTheme.background)
             .scrollContentBackground(.hidden)
             .navigationTitle("รุ่นและสีรถ")
             .navigationBarTitleDisplayMode(.inline)
@@ -694,12 +624,8 @@ private struct VehicleStylePicker: View {
 
     private func styleRow(_ style: MotorStyle) -> some View {
         HStack(spacing: 14) {
-            AsyncImage(url: style.thumbnailURL ?? style.imageURL) { image in
-                image.resizable().scaledToFit()
-            } placeholder: {
-                Color.white.opacity(0.05)
-            }
-            .frame(width: 76, height: 58)
+            VehicleArtwork(url: style.thumbnailURL ?? style.imageURL, maxPixelSize: 240)
+                .frame(width: 76, height: 58)
 
             Text(style.name)
                 .font(.subheadline)
@@ -736,9 +662,8 @@ private struct ConnectionBadge: View {
                 .frame(width: 26, height: 26)
                 .background((isPositive ? Color.green : Color.white).opacity(0.09), in: Circle())
             VStack(alignment: .leading, spacing: 1) {
-                Text(title.uppercased())
-                    .font(.system(size: 8, weight: .bold))
-                    .tracking(0.8)
+                Text(title)
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
                 Text(value)
                     .font(.caption2.weight(.semibold))
@@ -749,9 +674,9 @@ private struct ConnectionBadge: View {
         }
         .padding(.horizontal, 11)
         .frame(maxWidth: .infinity, minHeight: 48)
-        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
                 .stroke(.white.opacity(0.07), lineWidth: 0.5)
         }
     }
@@ -762,6 +687,7 @@ private struct WheelButton: View {
     let systemImage: String
     var isActive = false
     var isWorking = false
+    var expanded = false
     let action: () -> Void
     @Environment(\.isEnabled) var isEnabled
 
@@ -776,10 +702,13 @@ private struct WheelButton: View {
                         .foregroundStyle(isActive ? Color.cyan : Color.white)
                 }
                 Text(title)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(expanded ? .body.weight(.medium) : .caption2.weight(.medium))
                     .foregroundStyle(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(width: 64, height: 52)
+            .padding(expanded ? 12 : 0)
+            .frame(width: expanded ? nil : 64)
+            .frame(maxWidth: expanded ? .infinity : nil, minHeight: 52)
             .contentShape(Rectangle())
             .opacity(isEnabled || isWorking ? 1 : 0.4)
         }
@@ -914,7 +843,7 @@ private struct DashTabView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+            .background(AppTheme.background)
             .navigationTitle("จอรถ")
             .sheet(isPresented: $showsSearch) {
                 DashDestinationSearch(dashScreen: dashScreen, navigator: navigator)
@@ -1057,6 +986,7 @@ private struct ServiceView: View {
                     MetricRow(title: "ระยะถึงเช็กระยะ", value: model.vehicle?.maintenanceKilometers.map { "\($0) km" } ?? "--")
                     MetricRow(title: "ดาวเทียม", value: model.vehicle?.satelliteCount.map(String.init) ?? "--")
                 }
+                .redacted(reason: model.vehicle == nil && model.isBusy ? .placeholder : [])
 
                 Section {
                     Button {
@@ -1068,8 +998,8 @@ private struct ServiceView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
-            .navigationTitle("Service")
+            .background(AppTheme.background)
+            .navigationTitle("ดูแลรถ")
         }
     }
 }
@@ -1188,6 +1118,9 @@ private struct LegacyToolsView: View {
 
 private struct AccountView: View {
     @EnvironmentObject private var model: ZontesAppModel
+    @ObservedObject var bluetooth: VehicleBluetoothMonitor
+    @ObservedObject var dashScreen: DashScreenService
+    @ObservedObject var parking: ParkingSpotTracker
 
     var body: some View {
         NavigationStack {
@@ -1200,7 +1133,7 @@ private struct AccountView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(model.session?.account ?? "")
                                 .font(.headline)
-                            Text("ZONTES Smart account")
+                            Text("ZONTES Smart")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1214,15 +1147,38 @@ private struct AccountView: View {
                     LabeledContent("สิทธิ์", value: model.session?.isOwner == true ? "เจ้าของรถ" : "ผู้ได้รับอนุญาต")
                 }
 
+                Section("การตั้งค่า") {
+                    NavigationLink {
+                        ConnectionDiagnosticsView(bluetooth: bluetooth, dashScreen: dashScreen)
+                    } label: {
+                        Label("ตรวจการเชื่อมต่อ", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    NavigationLink {
+                        DataManagementView(dashScreen: dashScreen, parking: parking)
+                    } label: {
+                        Label("จัดการข้อมูล", systemImage: "externaldrive")
+                    }
+                }
+
+                Section("เกี่ยวกับแอปและข้อมูล") {
+                    ForEach(AppPolicy.allCases) { policy in
+                        NavigationLink {
+                            AppPolicyView(policy: policy)
+                        } label: {
+                            Label(policy.title, systemImage: policy.symbol)
+                        }
+                    }
+                }
+
                 Section {
                     Button("ออกจากระบบ", role: .destructive) { model.logout() }
                 } footer: {
-                    Text("รหัสผ่านไม่ถูกบันทึกในแอป ส่วน session ถูกเก็บใน iOS Keychain และจะถูกลบเมื่อออกจากระบบ")
+                    Text("ไม่บันทึกรหัสผ่าน · ลบเซสชันเมื่อออกจากระบบ")
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
-            .navigationTitle("My Account")
+            .background(AppTheme.background)
+            .navigationTitle("บัญชี")
         }
     }
 

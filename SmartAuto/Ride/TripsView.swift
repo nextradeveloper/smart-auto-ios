@@ -6,6 +6,7 @@ struct TripsView: View {
     @ObservedObject var recorder: TripRecorder
     @AppStorage(DashSettings.recordTripsKey) private var recordTrips = true
     @AppStorage(DashSettings.assumedSpeedLimitKey) private var assumedLimit = 90.0
+    @State private var pendingDeletes: [UUID] = []
 
     var body: some View {
         List {
@@ -45,7 +46,9 @@ struct TripsView: View {
                         NavigationLink { TripDetailView(trip: trip, recorder: recorder) } label: { TripRow(trip: trip) }
                     }
                     .onDelete { offsets in
-                        for index in offsets { recorder.delete(recorder.trips[index].id) }
+                        pendingDeletes = offsets.compactMap { index in
+                            recorder.trips.indices.contains(index) ? recorder.trips[index].id : nil
+                        }
                     }
                 }
             }
@@ -53,6 +56,18 @@ struct TripsView: View {
         .scrollContentBackground(.hidden)
         .background(Color.black)
         .navigationTitle("ทริป")
+        .confirmationDialog("ลบทริปที่เลือก?", isPresented: Binding(
+            get: { !pendingDeletes.isEmpty }, set: { if !$0 { pendingDeletes = [] } }
+        ), titleVisibility: .visible) {
+            let ids = pendingDeletes
+            Button("ลบ \(ids.count) ทริป", role: .destructive) {
+                pendingDeletes = []
+                for id in ids { recorder.delete(id) }
+            }
+            Button("ยกเลิก", role: .cancel) { pendingDeletes = [] }
+        } message: {
+            Text("ลบทริป พิกัด และข้อมูลถนนที่เลือกออกจากเครื่อง กู้คืนจากแอปไม่ได้")
+        }
     }
 
     private var monthSummary: some View {
@@ -120,6 +135,7 @@ struct TripDetailView: View {
     @State private var loadingRoads = false
     @State private var roadsError: String?
     @State private var focus: ClosedRange<Int>?
+    @State private var confirmsDelete = false
 
     var body: some View {
         List {
@@ -189,8 +205,7 @@ struct TripDetailView: View {
                     }
                 }
                 Button("ลบทริป", role: .destructive) {
-                    recorder.delete(trip.id)
-                    dismiss()
+                    confirmsDelete = true
                 }
             }
         }
@@ -207,6 +222,15 @@ struct TripDetailView: View {
             if roads == nil { await loadRoads() } else { analyze() }
         }
         .onChange(of: assumedLimit) { _ in analyze() }
+        .confirmationDialog("ลบทริปนี้?", isPresented: $confirmsDelete, titleVisibility: .visible) {
+            Button("ลบทริป", role: .destructive) {
+                recorder.delete(trip.id)
+                dismiss()
+            }
+            Button("ยกเลิก", role: .cancel) { confirmsDelete = false }
+        } message: {
+            Text("ลบทริป พิกัด และข้อมูลถนนนี้ออกจากเครื่อง กู้คืนจากแอปไม่ได้")
+        }
     }
 
     @MainActor

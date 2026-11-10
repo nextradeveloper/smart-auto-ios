@@ -172,4 +172,18 @@ enum EventLog {
     static func clear() {
         queue.async { try? FileManager.default.removeItem(at: SharedStore.logURL) }
     }
+
+    static func clearAndWait() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    let url = SharedStore.logURL
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        try FileManager.default.removeItem(at: url)
+                    }
+                    continuation.resume()
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
 }

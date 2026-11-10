@@ -8,21 +8,31 @@ final class ZontesAppModel: ObservableObject {
         didSet {
             guard oldValue?.carCode != vehicle?.carCode else { return }
             selectedStyle = vehicle.flatMap { VehicleStyleStore.load(pke: $0.carCode) }
-            // The catalog names the model when the account gives no name.
-            if vehicle != nil { Task { try? await loadMotorCatalog() } }
         }
     }
     /// Model and colour the owner picked, matching the artwork in the official app.
     @Published private(set) var selectedStyle: MotorStyle?
     @Published private(set) var motorCatalog: [MotorCategory] = []
     @Published private(set) var isBusy = false
+    @Published private(set) var hasNoVehicle = false
     @Published private(set) var busyText = ""
     @Published private(set) var commandInProgress: VehicleCommand?
     @Published var message: String?
+    private let vehicleLoader: (ZontesSession) async throws -> VehicleSnapshot
+    private let sessionClearer: () -> Void
+    private var refreshTask: Task<VehicleSnapshot, Error>?
+    private var refreshID = UUID()
+    private var catalogTask: Task<[MotorCategory], Error>?
 
-    init() {
-        session = ZontesSessionStore.load()
-        if session != nil {
+    init(session: ZontesSession? = ZontesSessionStore.load(),
+         automaticallyRefresh: Bool = true,
+         sessionClearer: @escaping () -> Void = { ZontesSessionStore.clear() },
+         vehicleLoader: @escaping (ZontesSession) async throws -> VehicleSnapshot = { try await ZontesAPI.shared.vehicle(session: $0) }) {
+        self.session = session
+        self.vehicleLoader = vehicleLoader
+        self.sessionClearer = sessionClearer
+        if session != nil && automaticallyRefresh {
+            isBusy = true
             Task { await refresh() }
         }
     }
@@ -43,31 +53,60 @@ final class ZontesAppModel: ObservableObject {
             try ZontesSessionStore.save(newSession)
             session = newSession
             busyText = "กำลังโหลดข้อมูลรถ…"
-            vehicle = try await ZontesAPI.shared.vehicle(session: newSession)
+            await refresh()
         } catch {
             message = error.localizedDescription
         }
     }
 
     func refresh() async {
-        guard let session else { return }
-        isBusy = true
-        busyText = "กำลังโหลดข้อมูลรถ…"
+        await refreshVehicle(reportErrors: true)
+    }
+
+    private func refreshVehicle(reportErrors: Bool) async {
+        guard let session, refreshTask == nil else { return }
+        let id = UUID()
+        refreshID = id
+        let loader = vehicleLoader
+        let task = Task { try await loader(session) }
+        refreshTask = task
+        if reportErrors {
+            isBusy = true
+            busyText = "กำลังโหลดข้อมูลรถ…"
+        }
         defer {
-            isBusy = false
-            busyText = ""
+            if refreshID == id {
+                refreshTask = nil
+                isBusy = false
+                busyText = ""
+            }
         }
         do {
-            vehicle = try await ZontesAPI.shared.vehicle(session: session)
+            let fresh = try await task.value
+            guard refreshID == id, self.session == session else { return }
+            hasNoVehicle = false
+            vehicle = fresh
         } catch {
-            message = error.localizedDescription
+            guard refreshID == id, self.session == session else { return }
+            if let failure = error as? ZontesError {
+                if failure == .authenticationRequired {
+                    logout()
+                    message = failure.localizedDescription
+                    return
+                }
+                if failure == .missingVehicle {
+                    vehicle = nil
+                    hasNoVehicle = true
+                    return
+                }
+            }
+            if reportErrors && !(error is CancellationError) { message = error.localizedDescription }
         }
     }
 
     /// Fresh fuel, range and tyres for the dash, without the busy indicator or error messages.
     func refreshQuietly() async {
-        guard let session, !isBusy else { return }
-        if let fresh = try? await ZontesAPI.shared.vehicle(session: session) { vehicle = fresh }
+        await refreshVehicle(reportErrors: false)
     }
 
     func send(_ command: VehicleCommand) async {
@@ -117,7 +156,14 @@ final class ZontesAppModel: ObservableObject {
 
     func loadMotorCatalog() async throws {
         guard motorCatalog.isEmpty else { return }
-        motorCatalog = try await ZontesAPI.shared.motorCatalog()
+        if let catalogTask {
+            motorCatalog = try await catalogTask.value
+            return
+        }
+        let task = Task { try await ZontesAPI.shared.motorCatalog() }
+        catalogTask = task
+        defer { catalogTask = nil }
+        motorCatalog = try await task.value
     }
 
     /// nil goes back to the account's artwork.
@@ -128,9 +174,15 @@ final class ZontesAppModel: ObservableObject {
     }
 
     func logout() {
-        ZontesSessionStore.clear()
+        refreshID = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        isBusy = false
+        busyText = ""
+        sessionClearer()
         session = nil
         vehicle = nil
+        hasNoVehicle = false
         message = nil
     }
 }

@@ -84,6 +84,31 @@ enum LegacyBluetoothProtocol {
     }
 }
 
+/// Run independently of BLE so failure/retry behavior can be tested without a vehicle.
+enum VehicleSignalSequence {
+    @MainActor
+    static func run(locked: Bool?, send: (VehicleCommand) async throws -> Void,
+                    pause: (UInt64) async -> Void = { duration in _ = try? await Task.sleep(nanoseconds: duration) }) async throws {
+        if locked == false {
+            try await send(.lock)
+            return
+        }
+        var unlockFailure: Error?
+        do { try await send(.unlock) } catch { unlockFailure = error }
+        // Even a lost unlock acknowledgement may leave the vehicle unlocked.
+        if unlockFailure == nil { await pause(1_200_000_000) }
+        for attempt in 0..<3 {
+            if attempt > 0 { await pause(800_000_000) }
+            do {
+                try await send(.lock)
+            } catch { continue }
+            if let unlockFailure { throw unlockFailure }
+            return
+        }
+        throw ZontesError.message("ยังยืนยันการล็อกกลับไม่ได้ อยู่ใกล้รถแล้วกดล็อกรถอีกครั้ง")
+    }
+}
+
 @MainActor
 final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     enum Status: Equatable {
@@ -106,6 +131,9 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     @Published private(set) var commandInProgress: VehicleCommand?
     /// Live from the vehicle while connected; nil until it reports.
     @Published private(set) var isLocked: Bool?
+    /// Keep recovery visible across finder dismissal and Bluetooth reconnects.
+    @Published private(set) var requiresRelock = false
+    @Published private(set) var signalInProgress = false
     @Published private(set) var batteryVoltage: Double?
     /// Smoothed RSSI in dBm while the find screen measures it.
     @Published private(set) var signalStrength: Int?
@@ -148,6 +176,7 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
 
     func configure(pke: String, mcu: String) {
         guard self.pke != pke || self.mcu != mcu else { return }
+        if self.pke != pke.trimmingCharacters(in: .whitespacesAndNewlines) { requiresRelock = false }
         generation += 1
         finish(ZontesError.commandConnectionClosed)
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
@@ -176,6 +205,11 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     }
 
     func send(_ command: VehicleCommand, reportsEvent: Bool = true) async throws {
+        guard !signalInProgress else { throw ZontesError.message("กำลังส่งสัญญาณและล็อกกลับ กรุณารอให้เสร็จก่อน") }
+        try await sendCommand(command, reportsEvent: reportsEvent)
+    }
+
+    private func sendCommand(_ command: VehicleCommand, reportsEvent: Bool) async throws {
         guard status.isPositive, writer != nil else { throw ZontesError.message("กรุณาเชื่อมต่อ Bluetooth กับรถก่อน") }
         guard continuation == nil, commandInProgress == nil else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
         switch command {
@@ -197,6 +231,8 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
         ignoredFrameCount = 0
         operationID += 1
         let operation = operationID
+        let commandVehicle = pke
+        let commandGeneration = generation
         try await withCheckedThrowingContinuation { (pending: CheckedContinuation<Void, Error>) in
             continuation = pending
             if !challengeRequested { enqueue(Data("*BT,\(pke),10,008#".utf8)) }
@@ -214,7 +250,13 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
                 self.finish(ZontesError.message(text))
             }
         }
-        if command == .lock { isLocked = true }
+        guard pke == commandVehicle, generation == commandGeneration else {
+            throw ZontesError.commandConnectionClosed
+        }
+        if command == .lock {
+            isLocked = true
+            requiresRelock = false
+        }
         if command == .unlock { isLocked = false }
         guard reportsEvent else { return }
         if command == .lock { onEvent?(.locked) }
@@ -222,27 +264,29 @@ final class VehicleBluetoothMonitor: NSObject, ObservableObject {
     }
 
     /// Makes the vehicle beep and flash. It only does so when its lock state changes, so a
-    /// locked (or unknown) vehicle is unlocked and locked again; it always ends locked. Not a
+    /// locked (or unknown) vehicle is unlocked and locked again. Failed locking needs recovery. Not a
     /// parking event: the phone may be tens of metres away.
     func signal() async throws {
-        if isLocked == false {
-            try await send(.lock, reportsEvent: false)
-            return
-        }
-        try await send(.unlock, reportsEvent: false)
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        var lastError: Error?
-        for attempt in 0 ..< 3 {
-            if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
-            do {
-                try await send(.lock, reportsEvent: false)
-                return
-            } catch {
-                lastError = error
+        guard !signalInProgress else { throw ZontesError.message("กำลังส่งสัญญาณอยู่") }
+        guard commandInProgress == nil else { throw ZontesError.message("กำลังส่งคำสั่งอื่นอยู่") }
+        signalInProgress = true
+        defer { signalInProgress = false }
+        // Set before sending: an unlock may reach the bike even if its acknowledgement is lost.
+        requiresRelock = true
+        let originalVehicle = pke
+        do {
+            try await VehicleSignalSequence.run(locked: isLocked, send: { command in
+                guard self.pke == originalVehicle else {
+                    throw ZontesError.message("รถที่เชื่อมต่อเปลี่ยนไป กรุณาตรวจการล็อกของรถคันเดิม")
+                }
+                try await self.sendCommand(command, reportsEvent: false)
+            })
+        } catch {
+            if requiresRelock {
+                EventLog.record("BLE", "Signal: could not confirm vehicle relock.")
             }
+            throw error
         }
-        EventLog.record("BLE", "Signal: unlocked but could not lock again (\(lastError?.localizedDescription ?? "unknown")).")
-        throw ZontesError.message("รถส่งสัญญาณแล้ว แต่ล็อกกลับไม่สำเร็จ รถยังปลดล็อกอยู่ กรุณากด Lock")
     }
 
     /// Reads RSSI twice a second while the find screen is open, and keeps scanning so the

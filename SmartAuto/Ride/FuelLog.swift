@@ -97,6 +97,11 @@ final class FuelLog: ObservableObject {
         persist()
     }
 
+    func deleteAll() throws {
+        try AppDataFiles.removeIfPresent(file)
+        fills = []
+    }
+
     private func persist() {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(fills) { try? data.write(to: file, options: .atomic) }

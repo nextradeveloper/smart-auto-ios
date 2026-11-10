@@ -166,6 +166,23 @@ app has no live view (its only RTSP reference is ExoPlayer's timeout constant). 
 camera page (`SmartAuto/Dashcam/`) plays and saves recordings, and "ทดสอบภาพสด" probes ports,
 RTSP and HTTP paths and JSON methods for a live stream; results go to the log under `CAM`.
 
+2026-11-10, Dashcam library UI: load dates, then times for the selected day only, then clips
+for the selected time. Video and photo lists now send subsequent `index` values in row offsets
+(120 videos / 100 pictures), deduplicate URLs and stop when a page repeats. The offset behavior
+still needs confirmation against a physical camera; the earlier evidence established only the
+first page. Photo day filters use a valid date embedded in the filename when present; the
+camera's photo response does not provide a separate capture-date field. Unknown dates stay
+unknown. Searching older photos loads metadata until a match, failure, cancellation or list end.
+
+Playback uses AVKit with a shared AVPlayer across inline/full-screen views, skip controls,
+rate selection and retry states. Photos use a paged viewer with pinch/double-tap zoom. Image
+decoding is limited to 360px thumbnails / 4096px full photos with memory-only camera caching;
+only the selected photo loads the larger image. Downloads use cancellable temporary files with
+unique directories and a longer resource timeout than metadata calls. DashcamUXTests covers
+selection/loading races, pagination, photo-date parsing, URL handling and seek boundaries.
+Native XCTest, actual media codec/range-seek support and camera paging remain unverified on
+the Windows development host.
+
 2026-11-08, second camera log: the camera answers VIDEO.DATE and PICTURE.INFO.LIST, so the
 recordings page's failure was in reading the next replies; parsing now accepts strings, numbers or
 objects, and the first reply of each method is logged under CAM. No live view exists: only 7686 and

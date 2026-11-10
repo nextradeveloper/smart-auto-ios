@@ -5,11 +5,14 @@ import SwiftUI
 @MainActor
 final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
     @Published var query = "" {
-        didSet { completer.queryFragment = query }
+        didSet { findSuggestions() }
     }
     @Published private(set) var results: [MKLocalSearchCompletion] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var failure: String?
 
-    private let completer = MKLocalSearchCompleter()
+    private var completer = MKLocalSearchCompleter()
+    private var region: MKCoordinateRegion?
 
     override init() {
         super.init()
@@ -19,8 +22,32 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
 
     func focus(on location: CLLocation?) {
         guard let location else { return }
-        completer.region = MKCoordinateRegion(center: location.coordinate,
-                                              latitudinalMeters: 60_000, longitudinalMeters: 60_000)
+        region = MKCoordinateRegion(center: location.coordinate,
+                                    latitudinalMeters: 60_000, longitudinalMeters: 60_000)
+        if let region { completer.region = region }
+    }
+
+    func retry() { findSuggestions() }
+
+    func cancel() {
+        completer.delegate = nil
+        completer.cancel()
+        completer = MKLocalSearchCompleter()
+        isLoading = false
+    }
+
+    private func findSuggestions() {
+        cancel()
+        results = []
+        failure = nil
+        let fragment = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fragment.isEmpty else { return }
+        // A new completer identifies this query, so callbacks from older text are ignored.
+        completer.delegate = self
+        completer.resultTypes = [.address, .pointOfInterest]
+        if let region { completer.region = region }
+        isLoading = true
+        completer.queryFragment = fragment
     }
 
     func resolve(_ completion: MKLocalSearchCompletion) async throws -> DashDestination {
@@ -36,11 +63,21 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
 
     nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
         let results = completer.results
-        Task { @MainActor in self.results = results }
+        Task { @MainActor in
+            guard self.completer === completer else { return }
+            self.results = results
+            self.failure = nil
+            self.isLoading = false
+        }
     }
 
     nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
-        Task { @MainActor in self.results = [] }
+        Task { @MainActor in
+            guard self.completer === completer else { return }
+            self.results = []
+            self.failure = "ค้นหาสถานที่ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง"
+            self.isLoading = false
+        }
     }
 }
 
@@ -107,12 +144,18 @@ struct DashDestinationSearch: View {
     var onPick: ((DashDestination) -> Void)? = nil
     @StateObject private var search = PlaceSearch()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var path: [DashDestination] = []
     @State private var resolving: MKLocalSearchCompletion?
     @State private var failure: String?
     @State private var quick: QuickPlace?
     @State private var nearby: [NearbyPlace] = []
     @State private var loadingNearby = false
+    @State private var nearbyFailure: String?
+    @State private var nearbyRequest = UUID()
+    @State private var nearbyTask: Task<Void, Never>?
+    @State private var resolveRequest = UUID()
+    @State private var resolveTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -125,7 +168,10 @@ struct DashDestinationSearch: View {
                     if let quick {
                         Section {
                             if loadingNearby {
-                                ProgressView()
+                                ProgressView("กำลังค้นหา\(quick.title)…")
+                            } else if let nearbyFailure {
+                                Text(nearbyFailure).foregroundStyle(.secondary)
+                                Button("ลองอีกครั้ง") { loadNearby(quick) }
                             } else if nearby.isEmpty {
                                 Text("ไม่พบ\(quick.title)ใกล้ๆ")
                                     .foregroundStyle(.secondary)
@@ -148,6 +194,15 @@ struct DashDestinationSearch: View {
                     }
                 } else {
                     Section {
+                        if search.isLoading {
+                            ProgressView("กำลังค้นหาสถานที่…")
+                        } else if let failure = search.failure {
+                            Text(failure).foregroundStyle(.secondary)
+                            Button("ลองอีกครั้ง") { search.retry() }
+                        } else if search.results.isEmpty {
+                            Text("ไม่พบสถานที่ ลองเปลี่ยนคำค้น")
+                                .foregroundStyle(.secondary)
+                        }
                         ForEach(search.results, id: \.self) { completion in
                             Button { open(completion) } label: {
                                 PlaceRow(symbol: "mappin", tint: .red, title: completion.title,
@@ -180,19 +235,35 @@ struct DashDestinationSearch: View {
             .onAppear {
                 dashScreen.prepareLocation()
                 search.focus(on: dashScreen.lastKnownLocation)
+                if !search.query.isEmpty { search.retry() }
+            }
+            .onChange(of: search.query) { _ in
+                cancelResolving()
+                nearbyTask?.cancel()
+                nearbyRequest = UUID()
+                loadingNearby = false
+                quick = nil
+                nearby = []
+                nearbyFailure = nil
+            }
+            .onDisappear {
+                nearbyTask?.cancel()
+                cancelResolving()
+                search.cancel()
             }
         }
     }
 
     private var quickPlaces: some View {
-        HStack(spacing: 8) {
+        LazyVGrid(columns: dynamicTypeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 96))], spacing: 8) {
             ForEach(QuickPlace.allCases) { place in
                 Button { toggle(place) } label: {
                     Label(place.title, systemImage: place.symbol)
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
+                        .frame(minHeight: 44)
+                        .padding(.vertical, 4)
                         .foregroundStyle(quick == place ? Color.white : place.tint)
                         .background(quick == place ? place.tint : place.tint.opacity(0.15),
                                     in: Capsule())
@@ -203,21 +274,36 @@ struct DashDestinationSearch: View {
     }
 
     private func toggle(_ place: QuickPlace) {
-        guard quick != place else { quick = nil; return }
+        nearbyTask?.cancel()
+        nearbyRequest = UUID()
+        loadingNearby = false
+        guard quick != place else { quick = nil; nearby = []; nearbyFailure = nil; return }
         quick = place
+        loadNearby(place)
+    }
+
+    private func loadNearby(_ place: QuickPlace) {
+        nearbyTask?.cancel()
+        let request = UUID()
+        nearbyRequest = request
         nearby = []
+        nearbyFailure = nil
+        dashScreen.prepareLocation()
         guard let location = dashScreen.lastKnownLocation else {
-            failure = "ยังไม่รู้ตำแหน่งปัจจุบัน"
+            loadingNearby = false
+            nearbyFailure = "ยังไม่ทราบตำแหน่ง ตรวจสิทธิ์ตำแหน่งแล้วลองอีกครั้ง"
             return
         }
         loadingNearby = true
-        Task { @MainActor in
-            defer { loadingNearby = false }
+        nearbyTask = Task { @MainActor in
+            defer { if nearbyRequest == request { loadingNearby = false } }
             do {
                 let found = try await place.nearby(location)
-                if quick == place { nearby = found }
+                guard !Task.isCancelled, nearbyRequest == request, quick == place else { return }
+                nearby = found
             } catch {
-                if quick == place { nearby = [] }
+                guard !Task.isCancelled, nearbyRequest == request, quick == place else { return }
+                nearbyFailure = "ค้นหา\(place.title)ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง"
             }
         }
     }
@@ -233,15 +319,27 @@ struct DashDestinationSearch: View {
 
     @MainActor
     private func open(_ completion: MKLocalSearchCompletion) {
+        cancelResolving()
+        let request = UUID()
+        resolveRequest = request
         resolving = completion
-        Task {
-            defer { resolving = nil }
+        resolveTask = Task {
+            defer { if resolveRequest == request { resolving = nil } }
             do {
-                choose(try await search.resolve(completion))
+                let place = try await search.resolve(completion)
+                guard !Task.isCancelled, resolveRequest == request else { return }
+                choose(place)
             } catch {
+                guard !Task.isCancelled, resolveRequest == request else { return }
                 failure = error.localizedDescription
             }
         }
+    }
+
+    private func cancelResolving() {
+        resolveTask?.cancel()
+        resolveRequest = UUID()
+        resolving = nil
     }
 }
 
@@ -263,18 +361,29 @@ private struct PlaceRow: View {
                 Text(title)
                     .font(.body)
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
             }
             Spacer(minLength: 0)
             if busy { ProgressView() }
         }
         .padding(.vertical, 2)
+    }
+}
+
+enum RoutePreviewLayout {
+    static func mapHeight(availableHeight: CGFloat, landscape: Bool, accessibilityText: Bool) -> CGFloat {
+        let height = max(0, availableHeight)
+        let reserved: CGFloat = accessibilityText ? 280 : 180
+        let cap: CGFloat = landscape ? 150 : 280
+        let result = min(cap, height * (landscape ? 0.30 : 0.35), max(0, height - reserved))
+        // Very short sheets keep the scrollable route list and its primary action usable.
+        return result >= 72 ? result : 0
     }
 }
 
@@ -294,80 +403,91 @@ struct DashRoutePreview: View {
     @State private var addingFuel = false
     @State private var fuelStops: Set<String> = []
     @State private var fuelNote: String?
+    @State private var retryAttempt = 0
+    @State private var routeRequest = UUID()
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(DashSettings.avoidHighwaysKey) private var avoidHighways = false
     @AppStorage(DashSettings.avoidTollsKey) private var avoidTolls = true
 
     /// Changes to any of these find the routes again.
     private var routeKey: String {
-        stops.map(\.id).joined(separator: "|") + "/\(avoidHighways)/\(avoidTolls)"
+        stops.map(\.id).joined(separator: "|") + "/\(avoidHighways)/\(avoidTolls)/\(retryAttempt)"
     }
 
     private var trip: DashTrip? { trips.indices.contains(selected) ? trips[selected] : nil }
 
     var body: some View {
-        VStack(spacing: 0) {
-            RouteMapView(trips: trips, selected: selected, destination: destination, stops: stops) { selected = $0 }
-                .frame(height: 280)
-            List {
-                Section {
-                    PlaceRow(symbol: "location.fill", tint: .blue, title: "ตำแหน่งของฉัน", subtitle: "")
-                    ForEach(stops) { stop in
-                        PlaceRow(symbol: "\((stops.firstIndex(of: stop) ?? 0) + 1).circle.fill", tint: .orange, title: stop.name, subtitle: stop.subtitle)
-                    }
-                    .onMove { stops.move(fromOffsets: $0, toOffset: $1) }
-                    .onDelete { stops.remove(atOffsets: $0) }
-                    PlaceRow(symbol: "mappin", tint: .red, title: destination.name, subtitle: destination.subtitle)
-                    Button { addingStop = true } label: {
-                        Label("เพิ่มจุดแวะ", systemImage: "plus.circle.fill")
-                            .font(.body.weight(.semibold))
-                    }
-                    .disabled(editMode == .active)
-                } header: {
-                    HStack {
-                        Text("เส้นทาง")
-                        Spacer()
-                        if stops.count >= 2 {
-                            Button(editMode == .active ? "เสร็จ" : "จัดลำดับ") {
-                                withAnimation { editMode = editMode == .active ? .inactive : .active }
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                let mapHeight = RoutePreviewLayout.mapHeight(availableHeight: geometry.size.height,
+                    landscape: geometry.size.width > geometry.size.height,
+                    accessibilityText: dynamicTypeSize.isAccessibilitySize)
+                if mapHeight > 0 {
+                    RouteMapView(trips: trips, selected: selected, destination: destination, stops: stops) { selected = $0 }
+                        .frame(height: mapHeight)
+                }
+                List {
+                    Section {
+                        PlaceRow(symbol: "location.fill", tint: .blue, title: "ตำแหน่งของฉัน", subtitle: "")
+                        ForEach(stops) { stop in
+                            PlaceRow(symbol: "\((stops.firstIndex(of: stop) ?? 0) + 1).circle.fill", tint: .orange, title: stop.name, subtitle: stop.subtitle)
+                        }
+                        .onMove { stops.move(fromOffsets: $0, toOffset: $1) }
+                        .onDelete { stops.remove(atOffsets: $0) }
+                        PlaceRow(symbol: "mappin", tint: .red, title: destination.name, subtitle: destination.subtitle)
+                        Button { addingStop = true } label: {
+                            Label("เพิ่มจุดแวะ", systemImage: "plus.circle.fill")
+                                .font(.body.weight(.semibold))
+                        }
+                        .disabled(editMode == .active)
+                    } header: {
+                        HStack {
+                            Text("เส้นทาง")
+                            Spacer()
+                            if stops.count >= 2 {
+                                Button(editMode == .active ? "เสร็จ" : "จัดลำดับ") {
+                                    withAnimation { editMode = editMode == .active ? .inactive : .active }
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .textCase(nil)
                             }
-                            .font(.footnote.weight(.semibold))
-                            .textCase(nil)
                         }
                     }
-                }
 
-                Section {
-                    if loading && trips.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("กำลังหาเส้นทาง")
+                    Section {
+                        if loading && trips.isEmpty {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("กำลังหาเส้นทาง")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if let failure, trips.isEmpty {
+                            Label(failure, systemImage: "exclamationmark.triangle")
                                 .foregroundStyle(.secondary)
+                            Button("ลองหาเส้นทางอีกครั้ง") { retryAttempt += 1 }
                         }
-                    } else if let failure, trips.isEmpty {
-                        Label(failure, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
+                        ForEach(trips) { option in
+                            let index = trips.firstIndex { $0.id == option.id } ?? 0
+                            Button { selected = index } label: { tripRow(option, chosen: index == selected) }
+                                .buttonStyle(.plain)
+                        }
                     }
-                    ForEach(trips) { option in
-                        let index = trips.firstIndex { $0.id == option.id } ?? 0
-                        Button { selected = index } label: { tripRow(option, chosen: index == selected) }
-                            .buttonStyle(.plain)
+
+                    if let trip, let range = dashScreen.currentVehicle().rangeKm,
+                       !stops.contains(where: { fuelStops.contains($0.id) }),
+                       trip.distance > Double(range) * 1000 - 15_000 {
+                        Section { fuelWarning(trip: trip, range: range) }
+                    }
+
+                    Section {
+                        Toggle("เลี่ยงทางด่วน/มอเตอร์เวย์", isOn: $avoidTolls)
+                        Toggle("เลี่ยงทางหลวง", isOn: $avoidHighways)
                     }
                 }
-
-                if let trip, let range = dashScreen.currentVehicle().rangeKm,
-                   !stops.contains(where: { fuelStops.contains($0.id) }),
-                   trip.distance > Double(range) * 1000 - 15_000 {
-                    Section { fuelWarning(trip: trip, range: range) }
-                }
-
-                Section {
-                    Toggle("เลี่ยงทางด่วน/มอเตอร์เวย์", isOn: $avoidTolls)
-                    Toggle("เลี่ยงทางหลวง", isOn: $avoidHighways)
-                }
+                .listStyle(.insetGrouped)
+                .environment(\.editMode, $editMode)
+                .safeAreaInset(edge: .bottom) { goBar }
             }
-            .listStyle(.insetGrouped)
-            .environment(\.editMode, $editMode)
-            .safeAreaInset(edge: .bottom) { goBar }
         }
         .navigationTitle(destination.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -473,9 +593,11 @@ struct DashRoutePreview: View {
 
     @MainActor
     private func loadRoutes() async {
+        let request = UUID()
+        routeRequest = request
         loading = true
         failure = nil
-        defer { loading = false }
+        defer { if routeRequest == request { loading = false } }
         let origin = dashScreen.lastKnownLocation
         do {
             let found: [DashTrip]
@@ -484,11 +606,12 @@ struct DashRoutePreview: View {
             } else {
                 found = [DashTrip(legs: try await DashNavigator.legs(through: stops + [destination], from: origin))]
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, routeRequest == request else { return }
             trips = found
             selected = 0
+            if found.isEmpty { failure = "ไม่พบเส้นทาง ลองเปลี่ยนจุดหมายหรือทางเลี่ยง" }
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, routeRequest == request else { return }
             trips = []
             failure = "หาเส้นทางไม่ได้: \(error.localizedDescription)"
         }

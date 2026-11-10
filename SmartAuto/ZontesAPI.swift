@@ -181,13 +181,22 @@ final class ZontesAPI {
                 throw error
             }
         }
-        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else { throw ZontesError.invalidResponse }
+        if let error = Self.responseError(statusCode: http.statusCode, authenticated: form["ACCESSTOKEN"] != nil) {
+            throw error
+        }
+        guard (200 ... 299).contains(http.statusCode) else {
             throw ZontesError.message("ระบบ ZONTES ไม่พร้อมใช้งาน")
         }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ZontesError.invalidResponse
         }
         return object
+    }
+
+    static func responseError(statusCode: Int, authenticated: Bool) -> ZontesError? {
+        if authenticated && [401, 403].contains(statusCode) { return .authenticationRequired }
+        return nil
     }
 
     private func formBody(_ values: [String: String]) -> Data? {

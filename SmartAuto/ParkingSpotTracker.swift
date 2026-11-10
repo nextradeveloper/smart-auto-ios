@@ -62,21 +62,32 @@ enum ParkedSpotStore {
         guard let data = try? JSONEncoder().encode(spot) else { return }
         UserDefaults.standard.set(data, forKey: key(pke))
     }
+
+    static func clearAll(defaults: UserDefaults = .standard) {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("parkedSpot.") {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
 
 /// Saves the parked spot from Bluetooth events: at Lock (phone beside the vehicle) and when
 /// the connection drops as the rider walks away, also while the app is in the background.
 @MainActor
 final class ParkingSpotTracker: NSObject, ObservableObject {
+    enum ManualSaveState: Equatable {
+        case idle, saving, saved, failed(String)
+    }
+
     @Published private(set) var spot: ParkedSpot?
     /// Only while the find screen is open.
     @Published private(set) var currentLocation: CLLocation?
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
+    @Published private(set) var manualSaveState: ManualSaveState = .idle
 
     private let manager = CLLocationManager()
     private var pke = ""
     private var lockSpot: ParkedSpot?
-    private var pending: [(source: ParkedSpot.Source, pke: String)] = []
+    private var pending: [(id: UUID, source: ParkedSpot.Source, pke: String)] = []
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var isLive = false
 
@@ -93,8 +104,11 @@ final class ParkingSpotTracker: NSObject, ObservableObject {
 
     func configure(pke: String) {
         guard pke != self.pke else { return }
+        pending.removeAll()
+        endBackgroundTask()
         self.pke = pke
         lockSpot = nil
+        manualSaveState = .idle
         spot = pke.isEmpty ? nil : ParkedSpotStore.load(pke: pke)
     }
 
@@ -113,7 +127,17 @@ final class ParkingSpotTracker: NSObject, ObservableObject {
     }
 
     func saveCurrentLocation() {
+        guard manualSaveState != .saving else { return }
         capture(.manual)
+    }
+
+    func clearSavedSpots() {
+        pending.removeAll()
+        lockSpot = nil
+        spot = nil
+        manualSaveState = .idle
+        endBackgroundTask()
+        ParkedSpotStore.clearAll()
     }
 
     /// iOS asks "While Using" first and offers "Always" once the app uses location in the
@@ -140,26 +164,41 @@ final class ParkingSpotTracker: NSObject, ObservableObject {
     }
 
     private func capture(_ source: ParkedSpot.Source) {
-        guard !pke.isEmpty else { return }
+        guard !pke.isEmpty else {
+            if source == .manual { manualSaveState = .failed("ยังไม่มีข้อมูลรถ ลองรีเฟรชหน้ารถก่อน") }
+            return
+        }
         let status = manager.authorizationStatus
         guard status == .authorizedAlways || status == .authorizedWhenInUse else {
+            if source == .manual {
+                manualSaveState = .failed("อนุญาตตำแหน่งในตั้งค่า iOS แล้วลองบันทึกอีกครั้ง")
+            }
             EventLog.record("PARK", "No location permission; \(source.rawValue) spot not saved.")
             return
         }
-        if let recent = manager.location, recent.horizontalAccuracy >= 0, recent.horizontalAccuracy <= 50,
-           -recent.timestamp.timeIntervalSinceNow < 10 {
+        if source == .manual { manualSaveState = .saving }
+        if let recent = manager.location, Self.isSuitableForManualSave(recent) {
             store(ParkedSpot(location: recent, source: source), pke: pke)
             return
         }
-        pending.append((source, pke))
+        let requestID = UUID()
+        pending.append((requestID, source, pke))
         beginBackgroundTask()
         if !isLive { manager.requestLocation() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
-            guard let self, !self.pending.isEmpty else { return }
+            guard let self, let request = self.pending.first(where: { $0.id == requestID }) else { return }
             EventLog.record("PARK", "No location fix in time; spot not saved.")
-            self.pending.removeAll()
-            self.endBackgroundTask()
+            self.pending.removeAll { $0.id == requestID }
+            if request.source == .manual, request.pke == self.pke {
+                self.manualSaveState = .failed("ยังหาตำแหน่งที่แม่นยำไม่ได้ ลองในที่โล่งแล้วบันทึกอีกครั้ง")
+            }
+            if self.pending.isEmpty { self.endBackgroundTask() }
         }
+    }
+
+    static func isSuitableForManualSave(_ location: CLLocation, now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince(location.timestamp)
+        return location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 50 && (0...10).contains(age)
     }
 
     private func store(_ candidate: ParkedSpot, pke: String) {
@@ -175,7 +214,10 @@ final class ParkingSpotTracker: NSObject, ObservableObject {
             chosen = candidate
         }
         ParkedSpotStore.save(chosen, pke: pke)
-        if pke == self.pke { spot = chosen }
+        if pke == self.pke {
+            spot = chosen
+            if candidate.source == .manual { manualSaveState = .saved }
+        }
         EventLog.record("PARK", "Saved parking spot (\(chosen.source.rawValue), ±\(Int(chosen.horizontalAccuracy)) m).")
     }
 
@@ -184,16 +226,21 @@ final class ParkingSpotTracker: NSObject, ObservableObject {
         if isLive { currentLocation = location }
         guard !pending.isEmpty else { return }
         let requests = pending
-        pending.removeAll()
         for request in requests {
+            // A live location can be enough to move the map, but not to claim an accurate manual save.
+            if request.source == .manual, !Self.isSuitableForManualSave(location) { continue }
+            pending.removeAll { $0.id == request.id }
             store(ParkedSpot(location: location, source: request.source), pke: request.pke)
         }
-        endBackgroundTask()
+        if pending.isEmpty { endBackgroundTask() }
     }
 
     private func failed(_ message: String) {
         guard !pending.isEmpty else { return }
         EventLog.record("PARK", "Location failed: \(message)")
+        if pending.contains(where: { $0.source == .manual && $0.pke == pke }) {
+            manualSaveState = .failed("หาตำแหน่งไม่ได้ ตรวจสิทธิ์ตำแหน่งแล้วลองอีกครั้ง")
+        }
         pending.removeAll()
         endBackgroundTask()
     }

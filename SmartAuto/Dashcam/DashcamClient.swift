@@ -1,14 +1,23 @@
 import Foundation
 
+protocol DashcamServing {
+    func dates(_ camera: DashcamClient.Camera) async throws -> [String]
+    func times(_ camera: DashcamClient.Camera, date: String) async throws -> [String]
+    func videos(_ camera: DashcamClient.Camera, date: String, time: String, index: Int) async throws -> [DashcamClient.Video]
+    func pictures(index: Int) async throws -> [DashcamClient.Picture]
+}
+
 /// The bike's camera unit (front and rear), on the bike's Wi-Fi at 192.168.3.1:7686.
 ///
 /// The official ZONTES app (1.12, DVRActivity and its fragments) talks to it with JSON POSTs to the
 /// root URL: VIDEO.DATE / VIDEO.TIME / VIDEO.INFO.LIST per camera ("front", "rear"),
 /// PICTURE.INFO.LIST, LOG.FILE.LIST. There is no live view: a probe of every likely port, RTSP and
 /// HTTP path and JSON method (2026-11-08) found none, and 8081 is the dash's firmware-update port.
-struct DashcamClient {
+struct DashcamClient: DashcamServing {
     static let host = "192.168.3.1"
     static let base = URL(string: "http://192.168.3.1:7686")!
+    static let videoPageSize = 120
+    static let picturePageSize = 100
 
     enum Camera: String, CaseIterable, Identifiable {
         case front, rear
@@ -22,17 +31,31 @@ struct DashcamClient {
         let playURL: URL
         let thumbURL: URL?
         var id: String { playURL.absoluteString }
+        var displayName: String { title.isEmpty ? (name.isEmpty ? playURL.lastPathComponent : name) : title }
     }
 
     struct Picture: Identifiable, Hashable {
         let url: URL
+        let dateKey: String?
+        init(url: URL) {
+            self.url = url
+            dateKey = DashcamLabels.dateKey(in: url.lastPathComponent)
+        }
         var id: String { url.absoluteString }
+        var name: String { url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent }
     }
 
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 15
+        return URLSession(configuration: configuration)
+    }()
+
+    private static let downloadSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 600
         return URLSession(configuration: configuration)
     }()
 
@@ -48,9 +71,9 @@ struct DashcamClient {
         return Self.strings(json["timeBeanList"], key: "time")
     }
 
-    func videos(_ camera: Camera, date: String, time: String) async throws -> [Video] {
-        let json = try await Self.call(["METHOD": "VIDEO.INFO.LIST", "date": date, "time": time, "index": 0,
-                                        "num": 120, "previewType": camera.rawValue, "sort": "des"])
+    func videos(_ camera: Camera, date: String, time: String, index: Int = 0) async throws -> [Video] {
+        let json = try await Self.call(["METHOD": "VIDEO.INFO.LIST", "date": date, "time": time, "index": index,
+                                        "num": Self.videoPageSize, "previewType": camera.rawValue, "sort": "des"])
         return Self.objects(json["videoBeanList"]).compactMap { item in
             guard let play = Self.url(item["playUrl"]) else { return nil }
             return Video(title: item["title"] as? String ?? "", name: item["name"] as? String ?? "",
@@ -58,18 +81,20 @@ struct DashcamClient {
         }
     }
 
-    func pictures() async throws -> [Picture] {
-        let json = try await Self.call(["METHOD": "PICTURE.INFO.LIST", "index": 0, "num": 100,
+    func pictures(index: Int = 0) async throws -> [Picture] {
+        let json = try await Self.call(["METHOD": "PICTURE.INFO.LIST", "index": index, "num": Self.picturePageSize,
                                         "previewType": "all", "sort": "des"])
-        return Self.objects(json["pictureBeanList"]).compactMap { Self.url($0["pictureUrl"]).map(Picture.init) }
+        return Self.objects(json["pictureBeanList"]).compactMap { Self.url($0["pictureUrl"]).map(Picture.init(url:)) }
     }
 
     /// Downloads a recording or photo to a temporary file named like the original.
     func download(_ url: URL) async throws -> URL {
-        let (temporary, response) = try await Self.session.download(from: url)
+        let (temporary, response) = try await Self.downloadSession.download(from: url)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ZontesError.message("ดาวน์โหลดไม่สำเร็จ") }
-        let target = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-        try? FileManager.default.removeItem(at: target)
+        try Task.checkCancellation()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Dashcam-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = folder.appendingPathComponent(url.lastPathComponent.isEmpty ? "dashcam" : url.lastPathComponent)
         try FileManager.default.moveItem(at: temporary, to: target)
         return target
     }
@@ -139,6 +164,7 @@ struct DashcamClient {
         } catch let error as ZontesError {
             throw error
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             throw ZontesError.message("ติดต่อกล้องไม่ได้ ต่อ Wi-Fi ของรถก่อน")
         }
     }
@@ -156,10 +182,11 @@ struct DashcamClient {
     }
 
     /// The camera writes "192.168.3.1:7686/..." without a scheme, or a path.
-    private static func url(_ value: Any?) -> URL? {
+    static func url(_ value: Any?) -> URL? {
         guard var text = value as? String, !text.isEmpty else { return nil }
-        if text.hasPrefix("/") { text = base.absoluteString + text }
-        if !text.contains("://") { text = "http://" + text }
-        return URL(string: text.replacingOccurrences(of: " ", with: "%20"))
+        if text.hasPrefix(host) { text = "http://" + text }
+        guard let url = URL(string: text.replacingOccurrences(of: " ", with: "%20"), relativeTo: base.appendingPathComponent("/"))?.absoluteURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
     }
 }

@@ -84,6 +84,11 @@ final class DashNavigator: ObservableObject {
     @Published private(set) var route: DashRoute?
     @Published private(set) var progress: DashRouteProgress?
     @Published private(set) var recents: [DashDestination] = RecentDestinations.load()
+
+    func clearRecents() {
+        RecentDestinations.clear()
+        recents = []
+    }
     /// Stops reached since guidance started, for the voice.
     private(set) var stopsReached = 0
 
@@ -420,6 +425,10 @@ final class DashNavigator: ObservableObject {
 enum RecentDestinations {
     private static let key = "dash.recentDestinations"
     private static let limit = 8
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
 
     static func load() -> [DashDestination] {
         guard let data = UserDefaults.standard.data(forKey: key),

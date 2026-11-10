@@ -14,6 +14,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var isRunning = false
     @Published private(set) var state: BroadcastState = .idle
     @Published private(set) var message = ""
+    @Published private(set) var isMaintainingCache = false
     /// What the dash shows, a few times a second, for the app's own view of it.
     @Published private(set) var preview: CGImage?
     /// For the phone's full-screen map, which repeats the dash's cards.
@@ -86,7 +87,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     // MARK: Screen
 
     func start() {
-        guard !isRunning else { return }
+        guard !isRunning, !isMaintainingCache else { return }
         let profile = DashProfile.byID(SharedStore.profileID)
         log("Dash screen starting. Profile \(profile.id), Wi-Fi \(DashLocator.wifiAddressDescription()).")
         let size = CGSize(width: profile.fallbackWidth, height: profile.fallbackHeight)
@@ -171,6 +172,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     /// The phone's full-screen map is open: keep location and the compass going for its cards even
     /// when the dash is off.
     func phoneMap(visible: Bool) {
+        guard !visible || !isMaintainingCache else { return }
         phoneMapVisible = visible
         if visible {
             startLocation(background: isRunning)
@@ -198,6 +200,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     /// Starts guidance, and the dash screen with it if it is not on yet.
     func startNavigation(to destination: DashDestination, stops: [DashDestination] = [], legs: [MKRoute]) {
+        guard !isMaintainingCache else { return }
         navigator.start(destination, stops: stops, legs: legs)
         maps.set(mode: .guidance)
         if !isRunning { start() }
@@ -211,6 +214,21 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
         maps.set(mode: .overview)
         if let lastLocation { maps.update(for: lastLocation) }
         refreshScene()
+    }
+
+    /// Hold one gate across all suspension points so auto-connect cannot restart map work
+    /// between the usage check and removal of the saved tiles.
+    func withCacheMaintenance(_ cleanup: @MainActor () async throws -> Void) async throws {
+        guard !isMaintainingCache, !isRunning, !phoneMapVisible, !navigator.isNavigating,
+              maps.preparing == nil, !maps.isSavingTiles else {
+            throw ZontesError.message("ปิดจอรถ จบการนำทาง และรอให้บันทึกแผนที่เสร็จก่อนล้างแคช")
+        }
+        isMaintainingCache = true
+        defer {
+            isMaintainingCache = false
+            if onDashWifi || bikeConnected { autoStart(onDashWifi ? "dash Wi-Fi after cache cleanup" : "bike Bluetooth after cache cleanup") }
+        }
+        try await cleanup()
     }
 
     // MARK: Auto connect
@@ -276,7 +294,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
     }
 
     private func autoStart(_ reason: String) {
-        guard DashSettings.autoConnect else { return }
+        guard DashSettings.autoConnect, !isMaintainingCache else { return }
         autoStopTask?.cancel()
         autoStopTask = nil
         guard !isRunning, !autoSuppressed else { return }

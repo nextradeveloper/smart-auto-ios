@@ -34,7 +34,7 @@ struct DashMapScreen: View {
                     }
                     Spacer()
                     if navigator.isNavigating {
-                        MapButton(symbol: "xmark.circle.fill", tint: .red) { dashScreen.stopNavigation() }
+                        MapButton(label: "จบการนำทาง", symbol: "xmark.circle.fill", tint: .red) { dashScreen.stopNavigation() }
                     }
                 }
                 Spacer()
@@ -42,14 +42,15 @@ struct DashMapScreen: View {
                     HStack(spacing: 10) {
                         timePill
                             .environment(\.layoutDirection, .leftToRight)
-                        MapButton(symbol: "xmark") { dismiss() }
+                        MapButton(label: "ปิดแผนที่", symbol: "xmark") { dismiss() }
                     }
                     Spacer(minLength: 8)
                     HStack(alignment: .bottom, spacing: 10) {
                         VStack(spacing: 10) {
                             dashZoomControl
-                            MapButton(symbol: threeD ? "view.2d" : "view.3d") { threeD.toggle() }
-                            MapButton(symbol: "location.fill", tint: .blue) { recenter += 1 }
+                            MapButton(label: threeD ? "แสดงแผนที่ 2 มิติ" : "แสดงแผนที่ 3 มิติ",
+                                      symbol: threeD ? "view.2d" : "view.3d") { threeD.toggle() }
+                            MapButton(label: "กลับไปยังตำแหน่งปัจจุบัน", symbol: "location.fill", tint: .blue) { recenter += 1 }
                         }
                         speedDial
                     }
@@ -126,6 +127,7 @@ struct DashMapScreen: View {
                 Image(systemName: "plus").frame(width: 48, height: 44)
             }
             .disabled(dashZoom == DashSettings.zoomLevels.first)
+            .accessibilityLabel("ขยายแผนที่บนจอรถ")
             Text("จอรถ")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -135,6 +137,7 @@ struct DashMapScreen: View {
                 Image(systemName: "minus").frame(width: 48, height: 44)
             }
             .disabled(dashZoom == DashSettings.zoomLevels.last)
+            .accessibilityLabel("ย่อแผนที่บนจอรถ")
         }
         .font(.system(size: 18, weight: .semibold))
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -142,6 +145,7 @@ struct DashMapScreen: View {
 }
 
 private struct MapButton: View {
+    let label: String
     let symbol: String
     var tint: Color = .primary
     let action: () -> Void
@@ -154,6 +158,7 @@ private struct MapButton: View {
                 .frame(width: 48, height: 48)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .accessibilityLabel(label)
     }
 }
 

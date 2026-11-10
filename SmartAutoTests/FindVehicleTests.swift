@@ -40,4 +40,31 @@ final class FindVehicleTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ParkedSpot.self, from: JSONEncoder().encode(spot))
         XCTAssertEqual(decoded, spot)
     }
+
+    @MainActor
+    func testManualSaveRejectsStaleInaccurateAndFutureLocations() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func fix(accuracy: Double, age: TimeInterval) -> CLLocation {
+            CLLocation(coordinate: CLLocationCoordinate2D(latitude: 13.7, longitude: 100.5),
+                       altitude: 0, horizontalAccuracy: accuracy, verticalAccuracy: -1,
+                       timestamp: now.addingTimeInterval(-age))
+        }
+        XCTAssertTrue(ParkingSpotTracker.isSuitableForManualSave(fix(accuracy: 50, age: 10), now: now))
+        XCTAssertFalse(ParkingSpotTracker.isSuitableForManualSave(fix(accuracy: 51, age: 1), now: now))
+        XCTAssertFalse(ParkingSpotTracker.isSuitableForManualSave(fix(accuracy: -1, age: 1), now: now))
+        XCTAssertFalse(ParkingSpotTracker.isSuitableForManualSave(fix(accuracy: 5, age: 11), now: now))
+        XCTAssertFalse(ParkingSpotTracker.isSuitableForManualSave(fix(accuracy: 5, age: -1), now: now))
+    }
+
+    @MainActor
+    func testManualSaveWithoutVehicleReportsFailure() {
+        let tracker = ParkingSpotTracker()
+        tracker.saveCurrentLocation()
+        guard case let .failed(message) = tracker.manualSaveState else {
+            XCTFail("A manual save without a vehicle must explain why it failed")
+            return
+        }
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertNil(tracker.spot)
+    }
 }

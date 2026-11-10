@@ -49,6 +49,7 @@ final class DashMapProvider: ObservableObject {
     var onMap: ((DashMapImage?) -> Void)?
     /// Map tiles along the route still being saved, for the app's progress bar.
     @Published private(set) var preparing: (done: Int, total: Int)?
+    @Published private(set) var isSavingTiles = false
 
     private var mode: Mode = .overview
     private var style: DashStyle = .dark
@@ -95,6 +96,7 @@ final class DashMapProvider: ObservableObject {
         current = nil
         pending = []
         queued = []
+        isSavingTiles = running > 0
         aroundCenter = nil
         clearRoute()
         liveWorksInBackground = nil
@@ -351,6 +353,8 @@ final class DashMapProvider: ObservableObject {
                 self.pump()
             }
         }
+        let saving = running > 0 || !pending.isEmpty
+        if isSavingTiles != saving { isSavingTiles = saving }
     }
 
     private func finished(_ key: DashTiles.Key, _ result: DashTiles.SaveResult) {
