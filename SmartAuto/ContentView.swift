@@ -624,7 +624,9 @@ private struct VehicleStylePicker: View {
 
     private func styleRow(_ style: MotorStyle) -> some View {
         HStack(spacing: 14) {
-            VehicleArtwork(url: style.thumbnailURL ?? style.imageURL, maxPixelSize: 240)
+            // The catalog's "small" picture is usually the larger download (about 640 KB against
+            // 260 KB), and this is the picture the dashboard shows once chosen.
+            VehicleArtwork(url: style.imageURL, maxPixelSize: 240)
                 .frame(width: 76, height: 58)
 
             Text(style.name)

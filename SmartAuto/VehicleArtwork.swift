@@ -1,3 +1,4 @@
+import CryptoKit
 import ImageIO
 import SwiftUI
 import UIKit
@@ -21,6 +22,18 @@ actor VehicleArtworkStore {
         session = URLSession(configuration: configuration)
     }
 
+    /// Resized copies on disk. The ZONTES image server takes about two seconds to answer each
+    /// request and sends several hundred KB per picture; its files never change, so a resized
+    /// copy is kept for good.
+    private static let diskDirectory = FileManager.default
+        .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("vehicle-artwork-resized", isDirectory: true)
+
+    private static func diskURL(for key: String) -> URL {
+        let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return diskDirectory.appendingPathComponent(digest + ".png")
+    }
+
     func image(url: URL, maxPixelSize: Int) async throws -> UIImage {
         let requestGeneration = generation
         let key = "\(maxPixelSize):\(url.absoluteString)"
@@ -31,12 +44,23 @@ actor VehicleArtworkStore {
             return image
         }
         let session = session
-        let task = Task<UIImage, Error> {
+        let file = Self.diskURL(for: key)
+        // Detached so downloads and decoding do not queue behind each other on this actor.
+        let task = Task.detached(priority: .userInitiated) { () throws -> UIImage in
+            if let saved = try? Data(contentsOf: file),
+               let image = try? Self.decode(saved, maxPixelSize: maxPixelSize) {
+                return image
+            }
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
                 throw URLError(.badServerResponse)
             }
-            return try Self.decode(data, maxPixelSize: maxPixelSize)
+            let image = try Self.decode(data, maxPixelSize: maxPixelSize)
+            if let png = image.pngData() {
+                try? FileManager.default.createDirectory(at: Self.diskDirectory, withIntermediateDirectories: true)
+                try? png.write(to: file, options: .atomic)
+            }
+            return image
         }
         pending[key] = task
         defer { if generation == requestGeneration { pending[key] = nil } }
@@ -53,6 +77,7 @@ actor VehicleArtworkStore {
         pending.removeAll()
         images.removeAllObjects()
         session.configuration.urlCache?.removeAllCachedResponses()
+        try? FileManager.default.removeItem(at: Self.diskDirectory)
     }
 
     nonisolated static func decode(_ data: Data, maxPixelSize: Int) throws -> UIImage {
