@@ -46,7 +46,7 @@ final class DashScreenService: NSObject, ObservableObject, CLLocationManagerDele
 
     private let store = DashSceneStore()
     private let locationManager = CLLocationManager()
-    private var lastLocation: CLLocation?
+    @Published private(set) var lastLocation: CLLocation?
     private var dash: DashSession?
     private var loop: DashFrameLoop?
     private var statusTimer: Timer?

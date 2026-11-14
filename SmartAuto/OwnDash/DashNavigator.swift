@@ -98,6 +98,7 @@ final class DashNavigator: ObservableObject {
     var onAnnounce: (@MainActor (String) -> Void)?
     private var lastFasterCheck = Date()
     private var checkingFaster = false
+    private var routeRequest = UUID()
 
     private var offRouteSince: Date?
     private var lastReroute = Date.distantPast
@@ -223,6 +224,7 @@ final class DashNavigator: ObservableObject {
     }
 
     func start(_ destination: DashDestination, stops: [DashDestination], legs: [MKRoute]) {
+        routeRequest = UUID()
         self.destination = destination
         self.stops = stops
         stopsReached = 0
@@ -243,6 +245,7 @@ final class DashNavigator: ObservableObject {
 
     func stop() {
         if status != .idle { log("Guidance ended.") }
+        routeRequest = UUID()
         status = .idle
         destination = nil
         stops = []
@@ -267,6 +270,8 @@ final class DashNavigator: ObservableObject {
     }
 
     func update(with location: CLLocation) {
+        guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100,
+              abs(location.timestamp.timeIntervalSinceNow) <= 15 else { return }
         lastLocation = location
         guard let route, let destination, status != .idle else { return }
         let course = location.course >= 0 && location.speed >= 4 ? location.course : nil
@@ -277,16 +282,19 @@ final class DashNavigator: ObservableObject {
             if let arrivedAt, Date().timeIntervalSince(arrivedAt) > 20 { stop() }
             return
         }
+        // The old route cannot establish stop or arrival progress while a new one is pending.
+        if status == .rerouting { return }
         // Past the next stop (or close to it): on to the next leg.
         let legIndex = route.legEnds.count - 1 - stops.count
         if let next = stops.first, legIndex >= 0, legIndex < route.legEnds.count - 1,
-           progress.distanceAlong >= route.legEnds[legIndex] - 30
+           (progress.offRoute < 40 && progress.distanceAlong >= route.legEnds[legIndex] - 30)
             || DashRoute.meters(location.coordinate, next.coordinate) < 40 {
             stops.removeFirst()
             stopsReached += 1
             log("Reached stop \"\(next.name)\".")
         }
-        if progress.remainingDistance < 30 || DashRoute.meters(location.coordinate, destination.coordinate) < 25 {
+        if (progress.offRoute < 40 && progress.remainingDistance < 30)
+            || DashRoute.meters(location.coordinate, destination.coordinate) < 25 {
             status = .arrived
             arrivedAt = Date()
             log("Arrived at \"\(destination.name)\".")
@@ -303,7 +311,7 @@ final class DashNavigator: ObservableObject {
             needed = 4
         } else if usable, wrongWay, progress.offRoute > 25 {
             needed = 3
-        } else if wrongWay {
+        } else if usable, wrongWay {
             needed = 8
         } else if progress.offRoute > 30, location.horizontalAccuracy <= 10 {
             needed = 8
@@ -335,10 +343,13 @@ final class DashNavigator: ObservableObject {
         lastFasterCheck = Date()
         let places = stops + [destination]
         let remaining = progress.remainingTime
+        let request = routeRequest
+        let routeID = route?.id
         Task {
             defer { self.checkingFaster = false }
             guard let found = try? await Self.legsAhead(through: places, from: location),
-                  self.status == .guiding, self.destination == destination, self.stops + [destination] == places,
+                  self.status == .guiding, self.routeRequest == request, self.route?.id == routeID,
+                  self.destination == destination, self.stops + [destination] == places,
                   let current = self.route else { return }
             let saving = remaining - found.legs.reduce(0) { $0 + $1.expectedTravelTime }
             guard saving >= max(180, remaining * 0.1) else { return }
@@ -356,7 +367,12 @@ final class DashNavigator: ObservableObject {
 
     private func use(_ built: DashRoute) {
         route = built
-        progress = nil
+        if let location = lastLocation {
+            let course = location.course >= 0 && location.speed >= 4 ? location.course : nil
+            progress = built.progress(at: location.coordinate, hint: nil, course: course)
+        } else {
+            progress = nil
+        }
         offRouteSince = nil
         onRoute?(built)
     }
@@ -364,6 +380,8 @@ final class DashNavigator: ObservableObject {
     /// A new route from here through the stops still ahead.
     private func reroute(_ reason: String) {
         guard let destination else { return }
+        let request = UUID()
+        routeRequest = request
         status = .rerouting
         lastReroute = Date()
         log("Rerouting: \(reason).")
@@ -372,13 +390,15 @@ final class DashNavigator: ObservableObject {
         Task {
             do {
                 let found = try await Self.legsAhead(through: places, from: location)
-                guard self.destination == destination, self.status != .idle else { return }
+                guard self.routeRequest == request, self.destination == destination,
+                      self.stops + [destination] == places, self.status == .rerouting else { return }
                 let built = DashRoute(legs: found.legs, lead: found.lead)
                 self.status = .guiding
                 self.use(built)
                 self.log("New route: \(Int(built.distance)) m, \(Int(built.expectedTravelTime / 60)) min" +
                          (found.lead != nil ? ", from the road ahead." : "."))
             } catch {
+                guard self.routeRequest == request else { return }
                 self.log("Rerouting failed: \(error.localizedDescription)")
                 if self.status == .rerouting { self.status = .guiding }
             }

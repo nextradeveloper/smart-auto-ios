@@ -8,11 +8,15 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
         didSet { findSuggestions() }
     }
     @Published private(set) var results: [MKLocalSearchCompletion] = []
+    @Published private(set) var places: [DashDestination] = []
     @Published private(set) var isLoading = false
     @Published private(set) var failure: String?
 
     private var completer = MKLocalSearchCompleter()
     private var region: MKCoordinateRegion?
+    private var suggestionTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
+    private var requestID = UUID()
 
     override init() {
         super.init()
@@ -21,7 +25,12 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
     }
 
     func focus(on location: CLLocation?) {
-        guard let location else { return }
+        guard let location, location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100,
+              abs(location.timestamp.timeIntervalSinceNow) <= 120 else { return }
+        if let region {
+            let center = CLLocation(latitude: region.center.latitude, longitude: region.center.longitude)
+            if location.distance(from: center) < 5_000 { return }
+        }
         region = MKCoordinateRegion(center: location.coordinate,
                                     latitudinalMeters: 60_000, longitudinalMeters: 60_000)
         if let region { completer.region = region }
@@ -30,6 +39,9 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
     func retry() { findSuggestions() }
 
     func cancel() {
+        suggestionTask?.cancel()
+        searchTask?.cancel()
+        requestID = UUID()
         completer.delegate = nil
         completer.cancel()
         completer = MKLocalSearchCompleter()
@@ -39,6 +51,7 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
     private func findSuggestions() {
         cancel()
         results = []
+        places = []
         failure = nil
         let fragment = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !fragment.isEmpty else { return }
@@ -47,7 +60,41 @@ final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
         completer.resultTypes = [.address, .pointOfInterest]
         if let region { completer.region = region }
         isLoading = true
-        completer.queryFragment = fragment
+        let request = requestID
+        suggestionTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
+            guard !Task.isCancelled, requestID == request else { return }
+            completer.queryFragment = fragment
+        }
+    }
+
+    /// Search the full text when suggestions do not include the intended place.
+    func submit() {
+        let fragment = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fragment.isEmpty else { return }
+        cancel()
+        results = []
+        places = []
+        failure = nil
+        isLoading = true
+        let request = requestID
+        let region = region
+        searchTask = Task { @MainActor in
+            let localRequest = MKLocalSearch.Request()
+            localRequest.naturalLanguageQuery = fragment
+            if let region { localRequest.region = region }
+            do {
+                let response = try await MKLocalSearch(request: localRequest).start()
+                guard !Task.isCancelled, requestID == request else { return }
+                var seen = Set<String>()
+                places = response.mapItems.map(DashDestination.init).filter { seen.insert($0.id).inserted }
+                isLoading = false
+            } catch {
+                guard !Task.isCancelled, requestID == request else { return }
+                failure = "ค้นหาสถานที่ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง"
+                isLoading = false
+            }
+        }
     }
 
     func resolve(_ completion: MKLocalSearchCompletion) async throws -> DashDestination {
@@ -199,9 +246,14 @@ struct DashDestinationSearch: View {
                         } else if let failure = search.failure {
                             Text(failure).foregroundStyle(.secondary)
                             Button("ลองอีกครั้ง") { search.retry() }
-                        } else if search.results.isEmpty {
+                        } else if search.results.isEmpty && search.places.isEmpty {
                             Text("ไม่พบสถานที่ ลองเปลี่ยนคำค้น")
                                 .foregroundStyle(.secondary)
+                        }
+                        ForEach(search.places) { place in
+                            Button { choose(place) } label: {
+                                PlaceRow(symbol: "mappin", tint: .red, title: place.name, subtitle: place.subtitle)
+                            }
                         }
                         ForEach(search.results, id: \.self) { completion in
                             Button { open(completion) } label: {
@@ -216,6 +268,8 @@ struct DashDestinationSearch: View {
             .listStyle(.insetGrouped)
             .searchable(text: $search.query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "ค้นหาสถานที่")
+            .onSubmit(of: .search) { search.submit() }
+            .onReceive(dashScreen.$lastLocation) { location in search.focus(on: location) }
             .autocorrectionDisabled()
             .navigationTitle(onPick == nil ? "ไปที่ไหน" : "เพิ่มจุดแวะ")
             .navigationBarTitleDisplayMode(.inline)

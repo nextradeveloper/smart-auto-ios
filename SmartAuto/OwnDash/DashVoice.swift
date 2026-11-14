@@ -11,6 +11,7 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
 
     private let synthesizer = AVSpeechSynthesizer()
     private let voice = AVSpeechSynthesisVoice(language: "th-TH")
+    private var routeID: UUID?
     private var step: Int?
     private var spoken: Set<Stage> = []
     private var lastStatus: DashNavigator.Status = .idle
@@ -52,6 +53,10 @@ final class DashVoice: NSObject, AVSpeechSynthesizerDelegate {
         }
         guard status == .guiding, let progress, let route, let next = progress.nextStep, next < route.steps.count
         else { return }
+        if route.id != routeID {
+            routeID = route.id
+            step = nil
+        }
         if next != step {
             step = next
             spoken = []

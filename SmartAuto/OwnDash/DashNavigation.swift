@@ -47,6 +47,7 @@ enum DashManeuver: Equatable {
 /// A route reduced to what guidance needs: the line, how far along it each step begins, and the
 /// arrow at each step.
 struct DashRoute {
+    let id = UUID()
     struct Step: Equatable {
         let instruction: String
         let maneuver: DashManeuver
@@ -64,7 +65,7 @@ struct DashRoute {
     var legEnds: [Double] = []
 
     init(coordinates: [CLLocationCoordinate2D], steps: [(instruction: String, distance: Double)],
-         expectedTravelTime: TimeInterval) {
+         expectedTravelTime: TimeInterval, stepStarts: [Double]? = nil) {
         self.coordinates = coordinates
         var cumulative: [Double] = [0]
         for index in coordinates.indices.dropFirst() {
@@ -77,15 +78,19 @@ struct DashRoute {
         var built: [Step] = []
         var start = 0.0
         for (index, step) in steps.enumerated() {
+            if let stepStarts, index < stepStarts.count { start = stepStarts[index] }
             let maneuver: DashManeuver
             if index == 0 {
                 maneuver = .straight
             } else {
                 let turn = Self.turn(at: start, coordinates: coordinates, cumulative: cumulative)
-                maneuver = DashManeuver.from(turn: turn, instruction: step.instruction, isLast: index == steps.count - 1)
+                maneuver = DashManeuver.from(turn: turn, instruction: step.instruction, isLast: index == steps.count - 1 && start >= distance - 10)
             }
             built.append(Step(instruction: step.instruction, maneuver: maneuver, startDistance: min(start, distance)))
             start += step.distance
+        }
+        if let last = built.last, last.startDistance < distance - 10 {
+            built.append(Step(instruction: "", maneuver: .arrive, startDistance: distance))
         }
         self.steps = built
         legEnds = [distance]
@@ -102,11 +107,13 @@ struct DashRoute {
         var coordinates: [CLLocationCoordinate2D] = []
         var steps: [(instruction: String, distance: Double)] = []
         var ends: [Int] = []
+        var stepLocations: [(coordinate: CLLocationCoordinate2D?, lower: Int, upper: Int)] = []
         if let lead { coordinates.append(lead) }
         for (legIndex, leg) in legs.enumerated() {
             let count = leg.polyline.pointCount
             var points = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: count)
             leg.polyline.getCoordinates(&points, range: NSRange(location: 0, length: count))
+            let lower = max(0, coordinates.count - 1)
             if legIndex > 0, !points.isEmpty, !coordinates.isEmpty { points.removeFirst() }
             coordinates += points
             ends.append(max(0, coordinates.count - 1))
@@ -115,16 +122,42 @@ struct DashRoute {
                     steps[steps.count - 1].distance += step.distance
                 } else {
                     steps.append((step.instructions, step.distance))
+                    stepLocations.append((step.polyline.allCoordinates.first, lower, max(0, coordinates.count - 1)))
                 }
             }
         }
         if lead != nil, coordinates.count > 1, !steps.isEmpty {
             steps[0].distance += DashRoute.meters(coordinates[0], coordinates[1])
         }
+        var cumulative = [0.0]
+        for index in coordinates.indices.dropFirst() {
+            cumulative.append(cumulative[index - 1] + Self.meters(coordinates[index - 1], coordinates[index]))
+        }
+        var previous = 0.0
+        var fallback = 0.0
+        let starts = stepLocations.enumerated().map { index, item -> Double in
+            defer { fallback += steps[index].distance }
+            guard let point = item.coordinate, item.upper > item.lower else {
+                previous = max(previous, min(fallback, cumulative.last ?? 0))
+                return previous
+            }
+            var bestDistance = Double.greatestFiniteMagnitude
+            var bestAlong = previous
+            for segment in item.lower ..< item.upper {
+                let (fraction, off) = Self.project(point, onto: coordinates[segment], coordinates[segment + 1])
+                let along = cumulative[segment] + fraction * (cumulative[segment + 1] - cumulative[segment])
+                if along >= previous - 1 && off < bestDistance {
+                    bestDistance = off
+                    bestAlong = max(previous, along)
+                }
+            }
+            previous = bestAlong
+            return previous
+        }
         self.init(coordinates: coordinates, steps: steps,
-                  expectedTravelTime: legs.reduce(0) { $0 + $1.expectedTravelTime })
-        let cumulative = self.cumulative
-        legEnds = ends.map { cumulative.isEmpty ? 0 : cumulative[min($0, cumulative.count - 1)] }
+                  expectedTravelTime: legs.reduce(0) { $0 + $1.expectedTravelTime }, stepStarts: starts)
+        let routeCumulative = self.cumulative
+        legEnds = ends.map { routeCumulative.isEmpty ? 0 : routeCumulative[min($0, routeCumulative.count - 1)] }
     }
 
     /// Where we are along the route. `hint` is the segment found last time, which keeps the search
@@ -177,7 +210,8 @@ struct DashRoute {
     func upcoming(from along: Double, length: Double) -> [CLLocationCoordinate2D] {
         guard !coordinates.isEmpty else { return [] }
         var points = [coordinate(at: along)]
-        for index in coordinates.indices where cumulative[index] > along {
+        let start = Self.firstIndex(after: along, in: cumulative)
+        for index in start ..< coordinates.count {
             points.append(coordinates[index])
             if cumulative[index] > along + length { break }
         }
@@ -256,7 +290,8 @@ struct DashRoute {
     static func coordinate(at along: Double, coordinates: [CLLocationCoordinate2D], cumulative: [Double]) -> CLLocationCoordinate2D {
         guard let first = coordinates.first else { return kCLLocationCoordinate2DInvalid }
         guard along > 0 else { return first }
-        for index in coordinates.indices.dropFirst() where cumulative[index] >= along {
+        let index = firstIndex(after: along, in: cumulative)
+        if index < coordinates.count {
             let length = cumulative[index] - cumulative[index - 1]
             let fraction = length > 0 ? (along - cumulative[index - 1]) / length : 0
             let a = coordinates[index - 1], b = coordinates[index]
@@ -264,6 +299,16 @@ struct DashRoute {
                                           longitude: a.longitude + (b.longitude - a.longitude) * fraction)
         }
         return coordinates[coordinates.count - 1]
+    }
+
+    /// First coordinate strictly beyond a distance, including duplicate points.
+    static func firstIndex(after distance: Double, in cumulative: [Double]) -> Int {
+        var lower = 0, upper = cumulative.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if cumulative[middle] <= distance { lower = middle + 1 } else { upper = middle }
+        }
+        return lower
     }
 
     /// Where `point` falls on segment a-b (0...1) and how far it is from it, in metres.

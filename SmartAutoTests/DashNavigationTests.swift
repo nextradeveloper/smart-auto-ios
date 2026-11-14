@@ -23,6 +23,20 @@ final class DashNavigationTests: XCTestCase {
         XCTAssertEqual(steps[1].startDistance, DashRoute.meters(start, corner), accuracy: 1)
     }
 
+    func testStepPositionsUseRouteGeometryInsteadOfReportedDistances() {
+        let cornerDistance = DashRoute.meters(start, corner)
+        let total = cornerDistance + DashRoute.meters(corner, end)
+        let route = DashRoute(coordinates: [start, corner, end],
+                              steps: [("", cornerDistance + 150), ("Turn left", 300)],
+                              expectedTravelTime: 300, stepStarts: [0, cornerDistance])
+        XCTAssertEqual(route.steps[1].startDistance, cornerDistance, accuracy: 1)
+        XCTAssertEqual(route.steps[1].maneuver, .left)
+        XCTAssertEqual(route.steps.last?.maneuver, .arrive)
+        XCTAssertEqual(route.steps.last!.startDistance, total, accuracy: 1)
+        XCTAssertEqual(route.progress(at: start, hint: nil).nextStep, 1)
+        XCTAssertEqual(route.progress(at: corner, hint: nil).nextStep, 2)
+    }
+
     func testManeuverClassification() {
         XCTAssertEqual(DashManeuver.from(turn: 5, instruction: "", isLast: false), .straight)
         XCTAssertEqual(DashManeuver.from(turn: 30, instruction: "", isLast: false), .slightRight)
@@ -31,6 +45,17 @@ final class DashNavigationTests: XCTestCase {
         XCTAssertEqual(DashManeuver.from(turn: 178, instruction: "", isLast: false), .uTurnRight)
         XCTAssertEqual(DashManeuver.from(turn: 90, instruction: "ที่วงเวียน ใช้ทางออกที่ 2", isLast: false), .roundabout)
         XCTAssertEqual(DashManeuver.from(turn: 90, instruction: "", isLast: true), .arrive)
+    }
+
+    func testCoordinateLookupHandlesDuplicatePointsAndRouteEnds() {
+        let route = DashRoute(coordinates: [start, start, corner, end], steps: [], expectedTravelTime: 300)
+        let atStart = route.coordinate(at: 0)
+        let atCorner = route.coordinate(at: route.cumulative[2])
+        let afterEnd = route.coordinate(at: route.distance + 100)
+        XCTAssertEqual(DashRoute.meters(atStart, start), 0, accuracy: 0.01)
+        XCTAssertEqual(DashRoute.meters(atCorner, corner), 0, accuracy: 0.01)
+        XCTAssertEqual(DashRoute.meters(afterEnd, end), 0, accuracy: 0.01)
+        XCTAssertEqual(route.upcoming(from: route.distance, length: 100).count, 1)
     }
 
     func testProgressAlongTheRoute() {
