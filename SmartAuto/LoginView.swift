@@ -9,6 +9,7 @@ struct LoginView: View {
     @State private var policy: AppPolicy?
     @State private var showsConsentReminder = false
     @State private var showsPasswordHelp = false
+    @State private var showsScanner = false
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable { case account, password }
@@ -30,7 +31,7 @@ struct LoginView: View {
                         Text("เข้าสู่ระบบ")
                             .font(.largeTitle.bold())
                             .accessibilityAddTraits(.isHeader)
-                        Text("ใช้บัญชี ZONTES Smart ของคุณ")
+                        Text("ใช้บัญชี ZONTES Smart ของคุณ หรือเชื่อมรถด้วย QR Code")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -104,7 +105,7 @@ struct LoginView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         if showsConsentReminder {
-                            Text("กรุณายอมรับเงื่อนไขก่อนเข้าสู่ระบบ")
+                            Text("กรุณายอมรับเงื่อนไขก่อนใช้งาน")
                                 .font(.footnote)
                                 .foregroundStyle(.orange)
                         }
@@ -153,6 +154,27 @@ struct LoginView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .disabled(!canSignIn)
                     }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                            Text("หรือ").font(.footnote).foregroundStyle(.secondary)
+                            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                        }
+                        Button(action: pairWithCode) {
+                            Label("เชื่อมรถด้วย QR Code", systemImage: "qrcode.viewfinder")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity, minHeight: 52)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .disabled(model.isBusy)
+                        Text("แอป ZONTES Smart รุ่นใหม่ไม่มีบัญชีอีเมลแล้ว ให้สแกน QR Code ของรถแทน แล้วสั่งรถผ่าน Bluetooth ได้เลย")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: 440, alignment: .leading)
                 .padding(.horizontal, 24)
@@ -170,6 +192,12 @@ struct LoginView: View {
             Button("ตกลง", role: .cancel) {}
         } message: {
             Text("เปิดแอป ZONTES Smart แล้วใช้เมนูลืมรหัสผ่าน จากนั้นกลับมาเข้าสู่ระบบที่นี่ด้วยรหัสผ่านใหม่")
+        }
+        .sheet(isPresented: $showsScanner) {
+            PairingScannerView { code in
+                showsScanner = false
+                model.pair(with: code)
+            }
         }
         .sheet(item: $policy) { item in
             NavigationStack {
@@ -194,6 +222,16 @@ struct LoginView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("อ่าน\(item.title)")
         }
+    }
+
+    private func pairWithCode() {
+        guard !model.isBusy else { return }
+        focusedField = nil
+        guard acceptsTerms else {
+            showsConsentReminder = true
+            return
+        }
+        showsScanner = true
     }
 
     private func signIn() {

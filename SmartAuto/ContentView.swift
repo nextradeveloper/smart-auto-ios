@@ -303,12 +303,15 @@ private struct VehicleDashboardView: View {
 
     private var connectionStrip: some View {
         HStack(spacing: 8) {
-            ConnectionBadge(
-                title: "ระบบรถ",
-                value: model.vehicle.map { $0.isOnline ? "ออนไลน์" : "ออฟไลน์" } ?? "—",
-                symbol: "network",
-                isPositive: model.vehicle?.isOnline == true
-            )
+            // Paired by QR code there is no ZONTES cloud to be online in.
+            if model.session?.isBluetoothOnly != true {
+                ConnectionBadge(
+                    title: "ระบบรถ",
+                    value: model.vehicle.map { $0.isOnline ? "ออนไลน์" : "ออฟไลน์" } ?? "—",
+                    symbol: "network",
+                    isPositive: model.vehicle?.isOnline == true
+                )
+            }
 
             Button { bluetooth.refresh() } label: {
                 ConnectionBadge(
@@ -562,22 +565,24 @@ private struct VehicleStylePicker: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        Section {
-                            Button {
-                                model.selectStyle(nil)
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    Text("ใช้ภาพจากบัญชี ZONTES")
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                    if model.selectedStyle == nil {
-                                        Image(systemName: "checkmark").foregroundStyle(.cyan)
+                        if model.session?.isBluetoothOnly != true {
+                            Section {
+                                Button {
+                                    model.selectStyle(nil)
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Text("ใช้ภาพจากบัญชี ZONTES")
+                                            .foregroundStyle(.primary)
+                                        Spacer()
+                                        if model.selectedStyle == nil {
+                                            Image(systemName: "checkmark").foregroundStyle(.cyan)
+                                        }
                                     }
                                 }
+                            } footer: {
+                                Text("เลือกรุ่นและสีรถของคุณ")
                             }
-                        } footer: {
-                            Text("เลือกรุ่นและสีรถของคุณ")
                         }
 
                         ForEach(orderedCategories) { category in
@@ -1129,13 +1134,13 @@ private struct AccountView: View {
             List {
                 Section {
                     HStack(spacing: 14) {
-                        Image(systemName: "person.crop.circle.fill")
+                        Image(systemName: isBluetoothOnly ? "qrcode" : "person.crop.circle.fill")
                             .font(.system(size: 46))
                             .foregroundStyle(.cyan)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(model.session?.account ?? "")
+                            Text(isBluetoothOnly ? "เชื่อมด้วย QR Code" : model.session?.account ?? "")
                                 .font(.headline)
-                            Text("ZONTES Smart")
+                            Text(isBluetoothOnly ? "สั่งรถผ่าน Bluetooth ไม่ใช้บัญชี ZONTES" : "ZONTES Smart")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1173,9 +1178,10 @@ private struct AccountView: View {
                 }
 
                 Section {
-                    Button("ออกจากระบบ", role: .destructive) { model.logout() }
+                    Button(isBluetoothOnly ? "เลิกเชื่อมรถคันนี้" : "ออกจากระบบ", role: .destructive) { model.logout() }
                 } footer: {
-                    Text("ไม่บันทึกรหัสผ่าน · ลบเซสชันเมื่อออกจากระบบ")
+                    Text(isBluetoothOnly ? "ลบรหัสรถที่ได้จาก QR Code ออกจากเครื่อง สแกนใหม่ได้ทุกเมื่อ"
+                                         : "ไม่บันทึกรหัสผ่าน · ลบเซสชันเมื่อออกจากระบบ")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -1183,6 +1189,8 @@ private struct AccountView: View {
             .navigationTitle("บัญชี")
         }
     }
+
+    private var isBluetoothOnly: Bool { model.session?.isBluetoothOnly == true }
 
     private func masked(_ value: String) -> String {
         guard value.count > 6 else { return value.isEmpty ? "--" : value }

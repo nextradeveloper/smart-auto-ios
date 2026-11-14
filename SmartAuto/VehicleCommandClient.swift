@@ -153,6 +153,39 @@ enum LegacyRemoteProtocol {
         return output
     }
 
+    /// AES-CBC with PKCS7 padding and a zero IV; the key length picks AES-128, -192 or -256.
+    static func aesCBC(_ input: Data, key: Data, encrypt: Bool) throws -> Data {
+        guard [16, 24, 32].contains(key.count) else { throw ZontesError.invalidVehicleKey }
+        let iv = Data(count: 16)
+        let outputCapacity = input.count + 16
+        var output = Data(count: outputCapacity)
+        var moved = 0
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            input.withUnsafeBytes { inputBytes in
+                key.withUnsafeBytes { keyBytes in
+                    iv.withUnsafeBytes { ivBytes in
+                        commonCrypt(
+                            encrypt ? 0 : 1, // kCCEncrypt / kCCDecrypt
+                            0, // kCCAlgorithmAES
+                            1, // kCCOptionPKCS7Padding
+                            keyBytes.baseAddress,
+                            key.count,
+                            ivBytes.baseAddress,
+                            inputBytes.baseAddress,
+                            input.count,
+                            outputBytes.baseAddress,
+                            outputCapacity,
+                            &moved
+                        )
+                    }
+                }
+            }
+        }
+        guard status == 0 else { throw ZontesError.invalidVehicleKey }
+        output.removeSubrange(moved ..< output.count)
+        return output
+    }
+
     private static func randomNonce() -> String {
         (0 ..< 8).map { _ in String(Int.random(in: 0 ... 9)) }.joined()
     }

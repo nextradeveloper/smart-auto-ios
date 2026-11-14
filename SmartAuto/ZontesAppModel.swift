@@ -31,7 +31,10 @@ final class ZontesAppModel: ObservableObject {
         self.session = session
         self.vehicleLoader = vehicleLoader
         self.sessionClearer = sessionClearer
-        if session != nil && automaticallyRefresh {
+        if let session, session.isBluetoothOnly {
+            vehicle = .bluetoothOnly(session)
+            selectedStyle = VehicleStyleStore.load(pke: session.carCode)
+        } else if session != nil && automaticallyRefresh {
             isBusy = true
             Task { await refresh() }
         }
@@ -59,12 +62,31 @@ final class ZontesAppModel: ObservableObject {
         }
     }
 
+    /// Binds a vehicle from its pairing QR code, without a ZONTES account.
+    func pair(with code: VehiclePairingCode) {
+        let newSession = code.session
+        do {
+            try ZontesSessionStore.save(newSession)
+        } catch {
+            message = error.localizedDescription
+            return
+        }
+        refreshID = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        hasNoVehicle = false
+        session = newSession
+        vehicle = .bluetoothOnly(newSession)
+    }
+
     func refresh() async {
         await refreshVehicle(reportErrors: true)
     }
 
     private func refreshVehicle(reportErrors: Bool) async {
         guard let session, refreshTask == nil else { return }
+        // Paired by QR code: nothing to fetch, the vehicle talks over Bluetooth.
+        guard !session.isBluetoothOnly else { return }
         let id = UUID()
         refreshID = id
         let loader = vehicleLoader

@@ -66,6 +66,23 @@ unlocked). Smart Auto primes on connect, asks for one challenge 1.2 s later to r
 battery, and lights Lock or Unlock from those replies and from acknowledged commands. Frames are
 written to the app log with the PKE code masked and signatures dropped.
 
+## Pairing without an account (2026-11-14)
+
+ZONTES Smart 1.13 (App Store, 12 Nov 2026) no longer offers email sign-up or sign-in; it binds the
+vehicle over Bluetooth instead. The 1.12 client already bound vehicles locally: it scans the QR code
+of the vehicle's PKE module and keeps the vehicle in its local `motor_db` (`BindMotorActivity`,
+`vf9.Z`). The QR text is `;`-separated: index 0 firmware version, 1 hardware/model code,
+**2 PKE code**, 3–6 other fields, **7 MCU ID** (32 hex), 8 IMSI. PKE code and MCU ID are all the
+Bluetooth signing needs, so Smart Auto's "เชื่อมรถด้วย QR Code" reads that code and works without an
+account (`VehiclePairingCode`, `PairingScannerView`). The session it stores has no access token
+(`isBluetoothOnly`), and the app never asks the cloud for it: no fuel, range or tyres, but lock,
+unlock, seat, fuel lid, lock state and battery over Bluetooth.
+
+The official app's "share vehicle" QR is `{"type":"ZontesShare","motoData":"<Base64>"}`; the data
+is AES-256-CBC (zero IV, PKCS7, key `TAYOBTa1YCWc2gTS` zero-padded to 32 bytes) of JSON whose
+`scanData` is the same PKE label text (`MotorInfoAdapter`, `s0`). Smart Auto reads it too, from the
+camera or a screenshot. How 1.13 itself pairs has not been checked against its binary.
+
 ## Vehicle artwork
 
 The official app does not show the account's `IndexImg`. While binding, the owner picks a

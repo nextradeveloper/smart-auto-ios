@@ -61,6 +61,7 @@ targets:
         NSLocationWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อแสดงแผนที่และความเร็วบนจอรถ จำจุดจอดรถ และนำทางกลับไปหารถ รวมถึงทำงานต่อขณะล็อกโทรศัพท์
         NSLocationAlwaysAndWhenInUseUsageDescription: Smart Auto ใช้ตำแหน่งเพื่อจำจุดจอดรถเมื่อคุณเดินออกห่างจากรถ แม้ไม่ได้เปิดแอป
         NSBluetoothAlwaysUsageDescription: Smart Auto ใช้ Bluetooth เพื่อสั่งงานรถ ZONTES และช่วยหารถเมื่ออยู่ใกล้
+        NSCameraUsageDescription: Smart Auto ใช้กล้องสแกน QR Code ของรถเพื่อเชื่อมรถโดยไม่ต้องมีบัญชี
         # Navigation to the parked spot opens Google Maps when it is installed.
         LSApplicationQueriesSchemes:
           - comgooglemaps
