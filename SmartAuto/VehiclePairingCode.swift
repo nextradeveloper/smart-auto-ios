@@ -41,7 +41,7 @@ struct VehiclePairingCode: Equatable {
         guard let outer = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
               let wrapped = outer["motoData"] as? String,
               let sealed = Data(base64Encoded: wrapped, options: .ignoreUnknownCharacters),
-              let plain = try? VehicleCommandClient.aesCBC(sealed, key: shareKeyData, encrypt: false),
+              let plain = try? LegacyRemoteProtocol.aesCBC(sealed, key: shareKeyData, encrypt: false),
               let inner = try? JSONSerialization.jsonObject(with: plain) as? [String: Any],
               let label = inner["scanData"] as? String
         else { throw invalidCode }
